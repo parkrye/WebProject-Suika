@@ -21,6 +21,7 @@ export class GameSync {
   private listeners: EventListener[] = [];
   private currentRoom: RoomState | null = null;
   private lastRoomState: RoomState | null = null;
+  private lastEmittedTurnStartTime = 0; // 중복 turn_start 방지
 
   constructor(network: NetworkManager) {
     this.network = network;
@@ -52,6 +53,10 @@ export class GameSync {
     return Math.max(0, GAME_CONFIG.TURN_TIME - elapsed);
   }
 
+  get isHost(): boolean {
+    return this.network.isHost();
+  }
+
   private handleRoomUpdate(room: RoomState): void {
     const prevRoom = this.lastRoomState;
     this.currentRoom = room;
@@ -62,6 +67,7 @@ export class GameSync {
     // 첫 번째 업데이트이고 이미 playing 상태면 바로 game_start
     if (!prevRoom) {
       if (room.status === 'playing') {
+        this.lastEmittedTurnStartTime = room.turnStartTime; // 중복 방지 초기화
         this.emit({ type: 'game_start' });
       }
       return;
@@ -69,6 +75,7 @@ export class GameSync {
 
     // 게임 시작 감지
     if (prevRoom.status === 'waiting' && room.status === 'playing') {
+      this.lastEmittedTurnStartTime = room.turnStartTime; // 중복 방지 초기화
       this.emit({ type: 'game_start' });
     }
 
@@ -77,14 +84,14 @@ export class GameSync {
       this.emit({ type: 'game_over', partyScore: room.partyScore });
     }
 
-    // 턴 변경 감지
-    if (
-      room.status === 'playing' &&
-      (prevRoom.currentPlayerIndex !== room.currentPlayerIndex ||
-        prevRoom.turnStartTime !== room.turnStartTime)
-    ) {
-      const currentPlayerId = room.playerOrder[room.currentPlayerIndex];
-      if (room.currentFruit) {
+    // 턴 변경 감지 (중복 방지)
+    if (room.status === 'playing' && room.currentFruit) {
+      if (room.turnStartTime === this.lastEmittedTurnStartTime) {
+        // 중복이면 무시
+      } else {
+        console.log('[GameSync] turn_start emit - turnStartTime:', room.turnStartTime, 'last:', this.lastEmittedTurnStartTime);
+        this.lastEmittedTurnStartTime = room.turnStartTime;
+        const currentPlayerId = room.playerOrder[room.currentPlayerIndex];
         this.emit({
           type: 'turn_start',
           playerId: currentPlayerId,
@@ -147,6 +154,7 @@ export class GameSync {
   }
 
   private emit(event: GameSyncEvent): void {
+    console.log('[GameSync] emit:', event.type, 'listeners count:', this.listeners.length);
     this.listeners.forEach((listener) => listener(event));
   }
 
@@ -187,5 +195,9 @@ export class GameSync {
 
   async reportGameOver(): Promise<void> {
     await this.network.endGame();
+  }
+
+  async syncAllFruits(fruits: Record<string, { x: number; y: number; size: number }>): Promise<void> {
+    await this.network.syncAllFruits(fruits);
   }
 }

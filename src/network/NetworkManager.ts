@@ -254,6 +254,30 @@ export class NetworkManager {
     });
   }
 
+  async syncAllFruits(fruits: Record<string, { x: number; y: number; size: number }>): Promise<void> {
+    if (!this.currentRoomId) return;
+
+    const fruitsUpdate: Record<string, { id: string; x: number; y: number; size: number; isDropped: boolean }> = {};
+    for (const [id, fruit] of Object.entries(fruits)) {
+      fruitsUpdate[id] = {
+        id,
+        x: fruit.x,
+        y: fruit.y,
+        size: fruit.size,
+        isDropped: true,
+      };
+    }
+
+    await set(ref(database, `rooms/${this.currentRoomId}/fruits`), fruitsUpdate);
+  }
+
+  isHost(): boolean {
+    if (!this.currentRoomState) return false;
+    const players = Object.values(this.currentRoomState.players);
+    const host = players.find(p => p.isHost);
+    return host?.id === this.playerId;
+  }
+
   async endGame(): Promise<void> {
     if (!this.currentRoomId) return;
 

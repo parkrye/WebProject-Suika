@@ -339,8 +339,14 @@ export class Lobby {
     this.network!.onRoomUpdate((room) => this.updateWaitingRoom(room));
   }
 
+  private gameStarted = false;
+
   private updateWaitingRoom(room: RoomState): void {
+    // 이미 게임이 시작됐으면 무시 (중복 방지)
+    if (this.gameStarted) return;
+
     if (room.status === 'playing' && this.onGameStart && this.network) {
+      this.gameStarted = true; // 한 번만 실행되도록
       this.container.innerHTML = '';
       this.onGameStart(this.network);
       return;

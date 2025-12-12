@@ -1,6 +1,6 @@
 import Matter from 'matter-js';
 import { GameSync, type GameSyncEvent } from '../network/GameSync';
-import type { RoomPlayer } from '../network/types';
+import type { RoomPlayer, FruitState } from '../network/types';
 
 // 과일 크기별 데이터
 const FRUIT_SIZES = [
@@ -18,6 +18,7 @@ const HEIGHT = 600;
 const DROP_Y = 80;
 const GAME_OVER_Y = 100;
 const TURN_TIME = 10;
+const SYNC_INTERVAL = 5; // 호스트가 몇 프레임마다 동기화할지
 
 type TurnPhase = 'waiting' | 'ready' | 'dropping' | 'settling';
 
@@ -25,10 +26,9 @@ export class MultiplayerGame {
   private ctx: CanvasRenderingContext2D;
   private sync: GameSync;
 
-  // Matter.js
+  // Matter.js (호스트만 실제로 사용)
   private engine: Matter.Engine;
-  private fruits = new Map<number, Matter.Body>();
-  private nextFruitId = 0;
+  private fruits = new Map<string, Matter.Body>();
 
   // 게임 상태
   private score = 0;
@@ -39,7 +39,7 @@ export class MultiplayerGame {
   private turnPhase: TurnPhase = 'waiting';
   private dropX = WIDTH / 2;
   private currentFruitSize = 1;
-  private droppedFruit: Matter.Body | null = null;
+  private droppedFruitId: string | null = null;
 
   // 타이머
   private timeRemaining = TURN_TIME;
@@ -52,6 +52,10 @@ export class MultiplayerGame {
   // 충돌 처리
   private mergedPairs = new Set<string>();
   private settleCheckTimer = 0;
+  private frameCount = 0;
+
+  // Firebase에서 받은 과일 상태 (비호스트용)
+  private remoteFruits: Record<string, FruitState> = {};
 
   constructor(canvas: HTMLCanvasElement, sync: GameSync) {
     this.ctx = canvas.getContext('2d')!;
@@ -60,7 +64,7 @@ export class MultiplayerGame {
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
 
-    // Matter.js 엔진 생성
+    // Matter.js 엔진 생성 (호스트만 실제로 물리 계산)
     this.engine = Matter.Engine.create();
     this.engine.world.gravity.y = 1;
 
@@ -72,7 +76,7 @@ export class MultiplayerGame {
     ];
     Matter.Composite.add(this.engine.world, walls);
 
-    // 충돌 이벤트
+    // 충돌 이벤트 (호스트만)
     Matter.Events.on(this.engine, 'collisionStart', (event) => this.handleCollision(event));
 
     // 입력 설정
@@ -110,6 +114,9 @@ export class MultiplayerGame {
         case 'game_start':
           this.handleGameStart();
           break;
+        case 'room_update':
+          this.handleRoomUpdate();
+          break;
         case 'turn_start':
           this.handleTurnStart(event.playerId, event.fruitSize, event.fruitX);
           break;
@@ -131,15 +138,76 @@ export class MultiplayerGame {
     this.handleTurnStart(currentPlayerId, fruitSize, fruitX);
   }
 
+  private handleRoomUpdate(): void {
+    const room = this.sync.room;
+    if (!room) return;
+
+    // Firebase에서 과일 상태 업데이트
+    this.remoteFruits = room.fruits || {};
+
+    // 호스트가 아니면 Firebase 상태를 로컬 물리에 반영
+    if (!this.sync.isHost) {
+      this.syncFruitsFromRemote();
+    }
+  }
+
+  private syncFruitsFromRemote(): void {
+    const remoteIds = new Set(Object.keys(this.remoteFruits));
+
+    // 원격에 없는 로컬 과일 제거
+    for (const [id, body] of this.fruits) {
+      if (!remoteIds.has(id)) {
+        Matter.Composite.remove(this.engine.world, body);
+        this.fruits.delete(id);
+      }
+    }
+
+    // 원격 과일 생성 또는 위치 업데이트
+    for (const [id, fruitState] of Object.entries(this.remoteFruits)) {
+      const existingBody = this.fruits.get(id);
+      if (existingBody) {
+        // 위치 업데이트 (부드럽게 보간)
+        Matter.Body.setPosition(existingBody, { x: fruitState.x, y: fruitState.y });
+        Matter.Body.setVelocity(existingBody, { x: 0, y: 0 });
+      } else {
+        // 새 과일 생성
+        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
+      }
+    }
+  }
+
+  // 마지막으로 처리한 턴 시작 시간 (중복 방지)
+  private lastTurnStartTime = 0;
+
   private handleTurnStart(_playerId: string, fruitSize: number, fruitX: number): void {
+    const room = this.sync.room;
+    if (!room) return;
+
+    // 이미 처리한 턴이면 무시 (중복 방지)
+    if (room.turnStartTime === this.lastTurnStartTime) {
+      console.log('[TurnStart] 중복 이벤트 무시');
+      return;
+    }
+
+    // settling 중이면 턴 시작 무시
+    if (this.turnPhase === 'settling') {
+      console.log('[TurnStart] settling 중이므로 무시');
+      return;
+    }
+
+    this.lastTurnStartTime = room.turnStartTime;
+    console.log('[TurnStart] playerId:', _playerId, 'isMyTurn:', this.sync.isMyTurn, 'turnStartTime:', room.turnStartTime);
+
     this.stopTimer();
     this.turnPhase = 'ready';
     this.currentFruitSize = fruitSize;
     this.dropX = fruitX;
-    this.droppedFruit = null;
+    this.droppedFruitId = null;
+    this.settleCheckTimer = 0;
 
     // 내 턴이면 타이머 시작
     if (this.sync.isMyTurn) {
+      console.log('[TurnStart] 내 턴! 타이머 시작');
       this.startTimer();
     }
   }
@@ -192,28 +260,36 @@ export class MultiplayerGame {
   }
 
   private dropFruit(): void {
+    console.log('[Drop] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase);
     if (!this.sync.isMyTurn || this.turnPhase !== 'ready') return;
 
     this.stopTimer();
     this.turnPhase = 'dropping';
 
+    // 고유 ID 생성
+    const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    this.droppedFruitId = fruitId;
+
+    console.log('[Drop] 과일 생성:', fruitId, 'x:', this.dropX, 'size:', this.currentFruitSize);
+
     // 과일 생성
-    this.droppedFruit = this.createFruit(this.dropX, DROP_Y, this.currentFruitSize);
+    this.createFruitWithId(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
     this.turnPhase = 'settling';
+    this.settleCheckTimer = 0;
+
+    console.log('[Drop] settling 상태로 전환, 타이머 리셋');
 
     // 서버에 드롭 알림
-    const fruitId = `fruit_${this.nextFruitId - 1}`;
     this.sync.dropFruit(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
   }
 
-  private createFruit(x: number, y: number, size: number): Matter.Body {
+  private createFruitWithId(id: string, x: number, y: number, size: number): Matter.Body {
     const data = FRUIT_SIZES[size - 1] || FRUIT_SIZES[0];
-    const id = this.nextFruitId++;
 
     const fruit = Matter.Bodies.circle(x, y, data.radius, {
       restitution: 0.2,
       friction: 0.5,
-      label: `fruit_${id}_${size}`,
+      label: `${id}_${size}`,
     });
 
     Matter.Composite.add(this.engine.world, fruit);
@@ -221,7 +297,7 @@ export class MultiplayerGame {
     return fruit;
   }
 
-  private removeFruit(id: number): void {
+  private removeFruitById(id: string): void {
     const fruit = this.fruits.get(id);
     if (fruit) {
       Matter.Composite.remove(this.engine.world, fruit);
@@ -229,15 +305,19 @@ export class MultiplayerGame {
     }
   }
 
-  private parseFruitLabel(label: string): { id: number; size: number } | null {
-    const match = label.match(/^fruit_(\d+)_(\d+)$/);
-    if (match) {
-      return { id: parseInt(match[1]), size: parseInt(match[2]) };
-    }
-    return null;
+  private parseFruitLabel(label: string): { id: string; size: number } | null {
+    const lastUnderscore = label.lastIndexOf('_');
+    if (lastUnderscore === -1) return null;
+    const id = label.substring(0, lastUnderscore);
+    const size = parseInt(label.substring(lastUnderscore + 1));
+    if (isNaN(size)) return null;
+    return { id, size };
   }
 
   private handleCollision(event: Matter.IEventCollision<Matter.Engine>): void {
+    // 호스트만 충돌 처리
+    if (!this.sync.isHost) return;
+
     for (const pair of event.pairs) {
       const fruitA = this.parseFruitLabel(pair.bodyA.label);
       const fruitB = this.parseFruitLabel(pair.bodyB.label);
@@ -253,16 +333,22 @@ export class MultiplayerGame {
         const bodyA = this.fruits.get(fruitA.id);
         const bodyB = this.fruits.get(fruitB.id);
 
-        if (!bodyA || !bodyB) return;
+        if (!bodyA || !bodyB) {
+          this.mergedPairs.delete(pairKey);
+          return;
+        }
 
         const midX = (bodyA.position.x + bodyB.position.x) / 2;
         const midY = (bodyA.position.y + bodyB.position.y) / 2;
         const newSize = Math.min(fruitA.size + 1, FRUIT_SIZES.length);
 
-        this.removeFruit(fruitA.id);
-        this.removeFruit(fruitB.id);
+        // 기존 과일 제거
+        this.removeFruitById(fruitA.id);
+        this.removeFruitById(fruitB.id);
 
-        const newFruit = this.createFruit(midX, midY, newSize);
+        // 새 과일 생성
+        const newFruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        this.createFruitWithId(newFruitId, midX, midY, newSize);
 
         // 점수 추가
         const scoreGain = FRUIT_SIZES[newSize - 1]?.score || 0;
@@ -274,29 +360,23 @@ export class MultiplayerGame {
         }
 
         // 드롭한 과일이 합쳐졌으면 새 과일로 교체
-        if (this.droppedFruit === bodyA || this.droppedFruit === bodyB) {
-          this.droppedFruit = newFruit;
+        if (this.droppedFruitId === fruitA.id || this.droppedFruitId === fruitB.id) {
+          this.droppedFruitId = newFruitId;
         }
 
-        // 서버에 점수 보고 (내 턴일 때만)
-        if (this.sync.isMyTurn) {
-          const room = this.sync.room;
-          if (room) {
-            const newPartyScore = room.partyScore + scoreGain;
-            this.sync.reportScore(this.score, newPartyScore);
-          }
+        // 서버에 점수 보고
+        const room = this.sync.room;
+        if (room) {
+          const newPartyScore = room.partyScore + scoreGain;
+          this.sync.reportScore(this.score, newPartyScore);
         }
 
         this.mergedPairs.delete(pairKey);
+
+        // 즉시 동기화
+        this.syncFruitsToServer();
       }, 0);
     }
-  }
-
-  private checkSettled(): boolean {
-    if (!this.droppedFruit) return true;
-    const speed = Matter.Vector.magnitude(this.droppedFruit.velocity);
-    const angularSpeed = Math.abs(this.droppedFruit.angularVelocity);
-    return speed < 0.3 && angularSpeed < 0.03;
   }
 
   private checkGameOver(): boolean {
@@ -312,8 +392,11 @@ export class MultiplayerGame {
   }
 
   private async nextTurn(): Promise<void> {
-    // 게임오버 체크
-    if (this.checkGameOver()) {
+    console.log('[NextTurn] 호출됨 - isHost:', this.sync.isHost, 'isMyTurn:', this.sync.isMyTurn);
+
+    // 게임오버 체크 (호스트만)
+    if (this.sync.isHost && this.checkGameOver()) {
+      console.log('[NextTurn] 게임오버!');
       await this.sync.reportGameOver();
       return;
     }
@@ -322,8 +405,30 @@ export class MultiplayerGame {
     const maxSpawn = Math.min(Math.max(1, this.maxFruitSize - 1), 5);
     const nextSize = Math.floor(Math.random() * maxSpawn) + 1;
 
-    // 서버에 다음 턴 요청
-    await this.sync.nextTurn(nextSize);
+    console.log('[NextTurn] 다음 과일 크기:', nextSize, '서버 요청 중...');
+
+    // 서버에 다음 턴 요청 (현재 턴 플레이어만)
+    if (this.sync.isMyTurn) {
+      await this.sync.nextTurn(nextSize);
+      console.log('[NextTurn] 서버 요청 완료');
+    }
+  }
+
+  private syncFruitsToServer(): void {
+    if (!this.sync.isHost) return;
+
+    const fruitsData: Record<string, { x: number; y: number; size: number }> = {};
+    for (const [id, body] of this.fruits) {
+      const parsed = this.parseFruitLabel(body.label);
+      if (parsed) {
+        fruitsData[id] = {
+          x: Math.round(body.position.x),
+          y: Math.round(body.position.y),
+          size: parsed.size,
+        };
+      }
+    }
+    this.sync.syncAllFruits(fruitsData);
   }
 
   private showGameOverScreen(partyScore: number): void {
@@ -352,19 +457,66 @@ export class MultiplayerGame {
       </div>
     `;
 
+    const style = document.createElement('style');
+    style.textContent = `
+      .game-over-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+      }
+      .game-over-content {
+        background: #1a1a2e;
+        padding: 40px;
+        border-radius: 16px;
+        text-align: center;
+        color: white;
+      }
+      .game-over-content h1 {
+        color: #e94560;
+        margin-bottom: 20px;
+      }
+      .final-rankings {
+        margin: 20px 0;
+      }
+      .ranking-item {
+        padding: 8px;
+        margin: 4px 0;
+        background: #2a2a3e;
+        border-radius: 8px;
+      }
+    `;
+    document.head.appendChild(style);
     document.body.appendChild(overlay);
   }
 
   private gameLoop = (): void => {
     if (!this.isRunning) return;
 
-    // 물리 업데이트
-    Matter.Engine.update(this.engine, 1000 / 60);
+    this.frameCount++;
 
-    // settling 상태에서 안정화 체크 (내 턴일 때만)
+    // 호스트만 물리 엔진 업데이트
+    if (this.sync.isHost) {
+      Matter.Engine.update(this.engine, 1000 / 60);
+
+      // 주기적으로 과일 위치 동기화
+      if (this.frameCount % SYNC_INTERVAL === 0) {
+        this.syncFruitsToServer();
+      }
+    }
+
+    // settling 상태에서 안정화 체크 (내 턴일 때)
     if (this.turnPhase === 'settling' && this.sync.isMyTurn) {
       this.settleCheckTimer++;
-      if (this.settleCheckTimer > 30 && this.checkSettled()) {
+      // 임시: 3초(180프레임) 후 다음 턴으로
+      if (this.settleCheckTimer > 180) {
+        console.log('[Settle] 3초 경과, 다음 턴으로');
         this.settleCheckTimer = 0;
         this.turnPhase = 'waiting';
         this.nextTurn();
@@ -426,7 +578,18 @@ export class MultiplayerGame {
       ctx.fillText(this.currentFruitSize.toString(), this.dropX, DROP_Y);
     }
 
-    // 과일 그리기
+    // 과일 그리기 (호스트는 로컬 물리, 비호스트는 원격 상태)
+    if (this.sync.isHost) {
+      this.renderLocalFruits(ctx);
+    } else {
+      this.renderRemoteFruits(ctx);
+    }
+
+    // UI
+    this.renderUI();
+  }
+
+  private renderLocalFruits(ctx: CanvasRenderingContext2D): void {
     for (const [, fruit] of this.fruits) {
       const { x, y } = fruit.position;
       const parsed = this.parseFruitLabel(fruit.label);
@@ -448,9 +611,26 @@ export class MultiplayerGame {
       ctx.textBaseline = 'middle';
       ctx.fillText(parsed.size.toString(), x, y);
     }
+  }
 
-    // UI
-    this.renderUI();
+  private renderRemoteFruits(ctx: CanvasRenderingContext2D): void {
+    for (const fruitState of Object.values(this.remoteFruits)) {
+      const data = FRUIT_SIZES[fruitState.size - 1] || FRUIT_SIZES[0];
+
+      ctx.beginPath();
+      ctx.arc(fruitState.x, fruitState.y, data.radius, 0, Math.PI * 2);
+      ctx.fillStyle = data.color;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff44';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(fruitState.size.toString(), fruitState.x, fruitState.y);
+    }
   }
 
   private renderUI(): void {
@@ -464,6 +644,12 @@ export class MultiplayerGame {
     ctx.textBaseline = 'top';
     ctx.fillText(`Party: ${room?.partyScore || 0}`, 10, 10);
     ctx.fillText(`My: ${this.score}`, 10, 28);
+
+    // 호스트 표시
+    if (this.sync.isHost) {
+      ctx.fillStyle = '#4BC0C0';
+      ctx.fillText('(Host)', 10, 46);
+    }
 
     // 현재 턴 플레이어
     if (room) {
@@ -490,13 +676,15 @@ export class MultiplayerGame {
       ctx.fillText(`${this.timeRemaining}`, WIDTH / 2, 22);
     }
 
-    // Waiting 표시
+    // Waiting 표시 (settling 카운트다운)
     if (this.turnPhase === 'settling') {
+      const remainingFrames = 180 - this.settleCheckTimer;
+      const remainingSeconds = Math.ceil(remainingFrames / 60);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#FFCD56';
       ctx.font = '14px Arial';
       ctx.textBaseline = 'top';
-      ctx.fillText('Waiting...', WIDTH / 2, 45);
+      ctx.fillText(`Settling... ${remainingSeconds}s`, WIDTH / 2, 45);
     }
 
     // 플레이어 목록 (우측)
@@ -510,9 +698,10 @@ export class MultiplayerGame {
 
       players.forEach((player, i) => {
         const isCurrentTurn = room.playerOrder[room.currentPlayerIndex] === player.id;
+        const hostMark = player.isHost ? '★' : '';
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
         ctx.fillStyle = isCurrentTurn ? '#4BC0C0' : '#aaa';
-        ctx.fillText(`${medal}${player.name}: ${player.score}`, WIDTH - 10, 50 + i * 16);
+        ctx.fillText(`${medal}${hostMark}${player.name}: ${player.score}`, WIDTH - 10, 50 + i * 16);
       });
     }
   }
