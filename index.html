@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi Suika Game</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background-color: #1a1a2e;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+      #app {
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      #game-container {
+        position: relative;
+      }
+      #game-canvas {
+        border: 4px solid #e94560;
+        border-radius: 8px;
+      }
+      #ui-overlay {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        color: white;
+        font-size: 16px;
+      }
+      .score-display {
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+      }
+      .timer-display {
+        background: rgba(233, 69, 96, 0.8);
+        padding: 8px 16px;
+        border-radius: 8px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 20px;
+        margin-bottom: 10px;
+      }
+      .turn-indicator {
+        background: rgba(0, 0, 0, 0.5);
+        padding: 8px 16px;
+        border-radius: 8px;
+        text-align: center;
+        margin-bottom: 10px;
+      }
+      .turn-indicator.my-turn {
+        background: rgba(75, 192, 192, 0.8);
+        font-weight: bold;
+      }
+      .players-scores {
+        background: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 8px;
+        font-size: 14px;
+      }
+      .player-score-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+      }
+      .player-score-item:last-child {
+        border-bottom: none;
+      }
+      .player-score-item.current-turn {
+        color: #4BC0C0;
+        font-weight: bold;
+      }
+      .game-over-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.85);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+      }
+      .game-over-content {
+        text-align: center;
+        color: white;
+        background: #1a1a2e;
+        padding: 40px;
+        border-radius: 16px;
+        border: 4px solid #e94560;
+      }
+      .game-over-content h1 {
+        color: #e94560;
+        font-size: 48px;
+        margin-bottom: 20px;
+      }
+      .game-over-content h2 {
+        color: #4BC0C0;
+        font-size: 32px;
+        margin-bottom: 30px;
+      }
+      .final-rankings {
+        margin-bottom: 30px;
+      }
+      .final-rankings h3 {
+        margin-bottom: 15px;
+        color: #FFD700;
+      }
+      .ranking-item {
+        padding: 8px 0;
+        font-size: 18px;
+      }
+      .btn {
+        padding: 12px 24px;
+        font-size: 16px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: transform 0.2s;
+      }
+      .btn:hover {
+        transform: scale(1.05);
+      }
+      .btn-primary {
+        background: #e94560;
+        color: white;
+      }
+      #controls {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 15px;
+      }
+      .control-btn {
+        width: 80px;
+        height: 60px;
+        font-size: 24px;
+        font-weight: bold;
+        border: none;
+        border-radius: 12px;
+        background: #4a4a6a;
+        color: white;
+        cursor: pointer;
+        transition: transform 0.1s, background 0.2s;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .control-btn:active {
+        transform: scale(0.95);
+        background: #3a3a5a;
+      }
+      .control-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .control-btn.btn-drop {
+        width: 120px;
+        background: #e94560;
+      }
+      .control-btn.btn-drop:active {
+        background: #c93550;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
