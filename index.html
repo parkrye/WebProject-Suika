@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Multi Suika Game</title>
+    <title>Fireworks Festival</title>
     <style>
       * {
         margin: 0;
@@ -11,12 +11,41 @@
         box-sizing: border-box;
       }
       body {
-        background-color: #1a1a2e;
+        background: linear-gradient(to bottom, #0a0a1a 0%, #1a1a3a 50%, #2a1a3a 100%);
         display: flex;
         justify-content: center;
         align-items: center;
         min-height: 100vh;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        overflow: hidden;
+      }
+      /* 별 배경 */
+      body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-image:
+          radial-gradient(2px 2px at 20px 30px, white, transparent),
+          radial-gradient(2px 2px at 40px 70px, rgba(255,255,255,0.8), transparent),
+          radial-gradient(1px 1px at 90px 40px, white, transparent),
+          radial-gradient(2px 2px at 160px 120px, rgba(255,255,255,0.9), transparent),
+          radial-gradient(1px 1px at 230px 80px, white, transparent),
+          radial-gradient(2px 2px at 300px 150px, rgba(255,255,255,0.7), transparent),
+          radial-gradient(1px 1px at 350px 50px, white, transparent),
+          radial-gradient(2px 2px at 420px 180px, white, transparent),
+          radial-gradient(1px 1px at 500px 100px, rgba(255,255,255,0.8), transparent),
+          radial-gradient(2px 2px at 580px 60px, white, transparent);
+        background-size: 600px 200px;
+        animation: twinkle 4s ease-in-out infinite;
+        pointer-events: none;
+        z-index: 0;
+      }
+      @keyframes twinkle {
+        0%, 100% { opacity: 0.8; }
+        50% { opacity: 1; }
       }
       #app {
         width: 100%;
@@ -24,13 +53,16 @@
         display: flex;
         justify-content: center;
         align-items: center;
+        position: relative;
+        z-index: 1;
       }
       #game-container {
         position: relative;
       }
       #game-canvas {
-        border: 4px solid #e94560;
-        border-radius: 8px;
+        border: 4px solid #ff6b9d;
+        border-radius: 12px;
+        box-shadow: 0 0 30px rgba(255, 107, 157, 0.4), 0 0 60px rgba(255, 200, 100, 0.2);
       }
       #ui-overlay {
         position: absolute;
@@ -47,13 +79,14 @@
         margin-bottom: 10px;
       }
       .timer-display {
-        background: rgba(233, 69, 96, 0.8);
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
         padding: 8px 16px;
         border-radius: 8px;
         text-align: center;
         font-weight: bold;
         font-size: 20px;
         margin-bottom: 10px;
+        box-shadow: 0 0 15px rgba(255, 107, 157, 0.5);
       }
       .turn-indicator {
         background: rgba(0, 0, 0, 0.5);
@@ -63,7 +96,7 @@
         margin-bottom: 10px;
       }
       .turn-indicator.my-turn {
-        background: rgba(75, 192, 192, 0.8);
+        background: linear-gradient(135deg, #4BC0C0, #36A2EB);
         font-weight: bold;
       }
       .players-scores {
@@ -100,13 +133,17 @@
       .game-over-content {
         text-align: center;
         color: white;
-        background: #1a1a2e;
+        background: linear-gradient(135deg, #1a1a3a, #2a1a4a);
         padding: 40px;
         border-radius: 16px;
-        border: 4px solid #e94560;
+        border: 4px solid #ff6b9d;
+        box-shadow: 0 0 40px rgba(255, 107, 157, 0.5);
       }
       .game-over-content h1 {
-        color: #e94560;
+        background: linear-gradient(135deg, #ff6b9d, #ffcc00, #ff6b9d);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
         font-size: 48px;
         margin-bottom: 20px;
       }
@@ -132,14 +169,18 @@
         border: none;
         border-radius: 8px;
         cursor: pointer;
-        transition: transform 0.2s;
+        transition: transform 0.2s, box-shadow 0.2s;
       }
       .btn:hover {
         transform: scale(1.05);
       }
       .btn-primary {
-        background: #e94560;
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
         color: white;
+        box-shadow: 0 0 15px rgba(255, 107, 157, 0.5);
+      }
+      .btn-primary:hover {
+        box-shadow: 0 0 25px rgba(255, 107, 157, 0.7);
       }
       #controls {
         display: flex;
@@ -154,16 +195,17 @@
         font-weight: bold;
         border: none;
         border-radius: 12px;
-        background: #4a4a6a;
+        background: linear-gradient(135deg, #4a4a7a, #3a3a6a);
         color: white;
         cursor: pointer;
-        transition: transform 0.1s, background 0.2s;
+        transition: transform 0.1s, box-shadow 0.2s;
         user-select: none;
         -webkit-user-select: none;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
       }
       .control-btn:active {
         transform: scale(0.95);
-        background: #3a3a5a;
+        background: linear-gradient(135deg, #3a3a6a, #2a2a5a);
       }
       .control-btn:disabled {
         opacity: 0.4;
@@ -172,10 +214,11 @@
       }
       .control-btn.btn-drop {
         width: 120px;
-        background: #e94560;
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
+        box-shadow: 0 4px 20px rgba(255, 107, 157, 0.4);
       }
       .control-btn.btn-drop:active {
-        background: #c93550;
+        background: linear-gradient(135deg, #e95a8c, #e88945);
       }
     </style>
   </head>
