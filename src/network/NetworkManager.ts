@@ -93,7 +93,7 @@ export class NetworkManager {
     }
 
     const playerCount = Object.keys(roomState.players).length;
-    if (playerCount >= 6) {
+    if (playerCount >= 10) {
       throw new Error('Room is full');
     }
 

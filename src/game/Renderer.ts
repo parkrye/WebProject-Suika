@@ -1,4 +1,4 @@
-import { GAME_CONFIG } from '../core/config';
+import { GAME_CONFIG, FRUIT_DATA } from '../core/config';
 import type { Fruit } from './Fruit';
 
 export class Renderer {
@@ -6,6 +6,7 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private width: number;
   private height: number;
+  private images: Map<number, HTMLImageElement> = new Map();
 
   constructor(canvas: HTMLCanvasElement, width: number, height: number) {
     this.canvas = canvas;
@@ -19,6 +20,18 @@ export class Renderer {
       throw new Error('Failed to get 2D context');
     }
     this.ctx = ctx;
+    this.loadImages();
+  }
+
+  private loadImages(): void {
+    for (const data of FRUIT_DATA) {
+      const img = new Image();
+      img.onerror = () => {
+        console.warn(`Failed to load image: ${data.image}`);
+      };
+      img.src = data.image;
+      this.images.set(data.size, img);
+    }
   }
 
   clear(): void {
@@ -39,20 +52,26 @@ export class Renderer {
 
   drawFruit(fruit: Fruit): void {
     const { x, y, radius, color, size } = fruit;
+    const img = this.images.get(size);
 
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, radius, 0, Math.PI * 2);
-    this.ctx.fillStyle = color;
-    this.ctx.fill();
-    this.ctx.strokeStyle = '#ffffff33';
-    this.ctx.lineWidth = 2;
-    this.ctx.stroke();
+    if (img && img.complete && img.naturalWidth > 0) {
+      const drawSize = radius * 2;
+      this.ctx.drawImage(img, x - radius, y - radius, drawSize, drawSize);
+    } else {
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+      this.ctx.fillStyle = color;
+      this.ctx.fill();
+      this.ctx.strokeStyle = '#ffffff33';
+      this.ctx.lineWidth = 2;
+      this.ctx.stroke();
 
-    this.ctx.fillStyle = '#fff';
-    this.ctx.font = `bold ${Math.max(12, radius * 0.6)}px Arial`;
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
-    this.ctx.fillText(size.toString(), x, y);
+      this.ctx.fillStyle = '#fff';
+      this.ctx.font = `bold ${Math.max(12, radius * 0.6)}px Arial`;
+      this.ctx.textAlign = 'center';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(size.toString(), x, y);
+    }
   }
 
   drawDropIndicator(x: number): void {

@@ -2,6 +2,7 @@ import Matter from 'matter-js';
 import { GameSync, type GameSyncEvent } from '../network/GameSync';
 import type { RoomPlayer, FruitState } from '../network/types';
 import { FRUIT_DATA, MAX_FRUIT_SIZE, SETTLE_FRAMES } from '../core/config';
+import { AudioManager } from '../core/AudioManager';
 
 const WIDTH = 400;
 const HEIGHT = 600;
@@ -70,7 +71,11 @@ export class MultiplayerGame {
   // 도시 창문 패턴 (고정)
   private windowPattern: boolean[][] = [];
 
+  // 오디오 매니저
+  private audio: AudioManager;
+
   constructor(canvas: HTMLCanvasElement, sync: GameSync) {
+    this.audio = AudioManager.getInstance();
     this.ctx = canvas.getContext('2d')!;
     this.sync = sync;
 
@@ -249,6 +254,8 @@ export class MultiplayerGame {
   private handleGameOver(partyScore: number): void {
     this.isRunning = false;
     this.stopTimer();
+    this.audio.stopBGM();
+    this.audio.playSFX('GAMEOVER');
     this.showGameOverScreen(partyScore);
   }
 
@@ -299,6 +306,7 @@ export class MultiplayerGame {
 
     this.stopTimer();
     this.turnPhase = 'dropping';
+    this.audio.playSFX('DROP');
 
     // 고유 ID 생성
     const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -381,6 +389,9 @@ export class MultiplayerGame {
         // 기존 과일 제거
         this.removeFruitById(fruitA.id);
         this.removeFruitById(fruitB.id);
+
+        // 합체 사운드
+        this.audio.playSFX('MERGE');
 
         // 크기 10이면 폭죽 효과 후 사라짐
         if (newSize >= MAX_FRUIT_SIZE) {
@@ -678,24 +689,9 @@ export class MultiplayerGame {
     const players = Object.values(room.players) as RoomPlayer[];
     players.sort((a, b) => b.score - a.score);
 
-    const overlay = document.createElement('div');
-    overlay.className = 'game-over-overlay';
-    overlay.innerHTML = `
-      <div class="game-over-content">
-        <h1>Game Over!</h1>
-        <h2>Party Score: ${partyScore}</h2>
-        <div class="final-rankings">
-          <h3>Rankings</h3>
-          ${players
-            .map((player, index) => {
-              const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
-              return `<div class="ranking-item">${medal} ${player.name}: ${player.score}</div>`;
-            })
-            .join('')}
-        </div>
-        <button class="btn btn-primary" onclick="location.reload()">Play Again</button>
-      </div>
-    `;
+    const playerCount = players.length;
+    const multiplier = this.getPlayerMultiplier(playerCount);
+    const finalScore = Math.floor(partyScore * multiplier);
 
     const style = document.createElement('style');
     style.textContent = `
@@ -705,35 +701,310 @@ export class MultiplayerGame {
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0,0,0,0.8);
+        background: rgba(0,0,0,0.9);
         display: flex;
         justify-content: center;
         align-items: center;
         z-index: 1000;
       }
       .game-over-content {
-        background: #1a1a2e;
-        padding: 40px;
-        border-radius: 16px;
+        background: linear-gradient(135deg, #1a1a2e, #2a1a4a);
+        padding: 40px 50px;
+        border-radius: 20px;
         text-align: center;
         color: white;
+        border: 3px solid #ff6b9d;
+        box-shadow: 0 0 50px rgba(255, 107, 157, 0.4);
+        min-width: 360px;
+        max-width: 450px;
       }
-      .game-over-content h1 {
-        color: #e94560;
-        margin-bottom: 20px;
+      .game-over-title {
+        font-size: 42px;
+        background: linear-gradient(135deg, #ff6b9d, #ffcc00, #ff6b9d);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 30px;
+        opacity: 0;
+        transform: scale(0.5);
+        animation: popIn 0.6s ease-out forwards;
       }
-      .final-rankings {
+      @keyframes popIn {
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes fadeSlideIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes countUp {
+        from { opacity: 0; transform: scale(0.8); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes glowPulse {
+        0%, 100% { box-shadow: 0 0 10px rgba(255, 215, 0, 0.5); }
+        50% { box-shadow: 0 0 25px rgba(255, 215, 0, 0.8); }
+      }
+      .score-phase {
         margin: 20px 0;
+        opacity: 0;
+        transform: translateY(20px);
       }
-      .ranking-item {
-        padding: 8px;
-        margin: 4px 0;
-        background: #2a2a3e;
-        border-radius: 8px;
+      .score-phase.visible {
+        animation: fadeSlideIn 0.5s ease-out forwards;
+      }
+      .phase-title {
+        font-size: 14px;
+        color: #888;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+      }
+      .player-contribution {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 15px;
+        margin: 6px 0;
+        background: rgba(255,255,255,0.05);
+        border-radius: 10px;
+        border-left: 3px solid #4BC0C0;
+        opacity: 0;
+        transform: translateX(-20px);
+      }
+      .player-contribution.visible {
+        animation: fadeSlideIn 0.4s ease-out forwards;
+      }
+      .player-contribution.top-1 { border-left-color: #FFD700; }
+      .player-contribution.top-2 { border-left-color: #C0C0C0; }
+      .player-contribution.top-3 { border-left-color: #CD7F32; }
+      .player-name { font-weight: bold; }
+      .player-score { color: #4BC0C0; font-weight: bold; }
+      .total-score {
+        font-size: 36px;
+        color: #fff;
+        margin: 10px 0;
+      }
+      .multiplier-display {
+        display: inline-block;
+        padding: 8px 20px;
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
+        border-radius: 20px;
+        font-size: 18px;
+        font-weight: bold;
+        margin: 10px 0;
+      }
+      .final-score-container {
+        margin: 20px 0;
+        padding: 20px;
+        background: rgba(255, 215, 0, 0.1);
+        border-radius: 15px;
+        border: 2px solid #FFD700;
+      }
+      .final-score-container.visible {
+        animation: glowPulse 1.5s ease-in-out infinite;
+      }
+      .final-score-label {
+        font-size: 16px;
+        color: #FFD700;
+        margin-bottom: 5px;
+      }
+      .final-score-value {
+        font-size: 48px;
+        font-weight: bold;
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+      .top-contributors {
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+      }
+      .top-contributor-item {
+        display: inline-block;
+        margin: 5px 8px;
+        padding: 8px 15px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 20px;
+        font-size: 14px;
+      }
+      .medal { margin-right: 5px; }
+      .play-again-btn {
+        margin-top: 25px;
+        padding: 14px 40px;
+        font-size: 18px;
+        font-weight: bold;
+        border: none;
+        border-radius: 30px;
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
+        color: white;
+        cursor: pointer;
+        opacity: 0;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 4px 20px rgba(255, 107, 157, 0.4);
+      }
+      .play-again-btn.visible {
+        animation: fadeSlideIn 0.5s ease-out forwards;
+      }
+      .play-again-btn:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 30px rgba(255, 107, 157, 0.6);
       }
     `;
     document.head.appendChild(style);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'game-over-overlay';
+    overlay.innerHTML = `
+      <div class="game-over-content">
+        <h1 class="game-over-title">Game Over!</h1>
+
+        <div class="score-phase" id="phase-contributions">
+          <div class="phase-title">Player Contributions</div>
+          <div id="contributions-list"></div>
+        </div>
+
+        <div class="score-phase" id="phase-total">
+          <div class="phase-title">Total Party Score</div>
+          <div class="total-score" id="total-score-value">0</div>
+        </div>
+
+        <div class="score-phase" id="phase-multiplier">
+          <div class="phase-title">${playerCount} Players Bonus</div>
+          <div class="multiplier-display">x${multiplier.toFixed(1)}</div>
+        </div>
+
+        <div class="score-phase" id="phase-final">
+          <div class="final-score-container">
+            <div class="final-score-label">Final Score</div>
+            <div class="final-score-value" id="final-score-value">0</div>
+          </div>
+          <div class="top-contributors" id="top-contributors"></div>
+        </div>
+
+        <button class="play-again-btn" id="play-again-btn" onclick="location.reload()">Play Again</button>
+      </div>
+    `;
     document.body.appendChild(overlay);
+
+    // 연출 시퀀스 시작
+    this.runScoreAnimation(players, partyScore, multiplier, finalScore);
+  }
+
+  private getPlayerMultiplier(playerCount: number): number {
+    // 인원 범위: 1~10명
+    const clampedCount = Math.max(1, Math.min(10, playerCount));
+
+    // 로그 기반 배율: 1명 = x1.0, 10명 = x2.0 (증가폭 점점 감소)
+    // 공식: 1 + ln(n) / ln(10)
+    if (clampedCount === 1) return 1.0;
+    return 1 + Math.log(clampedCount) / Math.log(10);
+  }
+
+  private async runScoreAnimation(
+    players: RoomPlayer[],
+    partyScore: number,
+    _multiplier: number,
+    finalScore: number
+  ): Promise<void> {
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Phase 1: 플레이어별 기여 점수 공개
+    await delay(800);
+    const phase1 = document.getElementById('phase-contributions');
+    const contributionsList = document.getElementById('contributions-list');
+    if (phase1 && contributionsList) {
+      phase1.classList.add('visible');
+
+      for (let i = 0; i < players.length; i++) {
+        await delay(400);
+        const player = players[i];
+        const topClass = i === 0 ? 'top-1' : i === 1 ? 'top-2' : i === 2 ? 'top-3' : '';
+        const item = document.createElement('div');
+        item.className = `player-contribution ${topClass}`;
+        item.innerHTML = `
+          <span class="player-name">${player.name}</span>
+          <span class="player-score">+${player.score.toLocaleString()}</span>
+        `;
+        contributionsList.appendChild(item);
+        setTimeout(() => item.classList.add('visible'), 50);
+        this.audio.playSFX('CLICK');
+      }
+    }
+
+    // Phase 2: 총 합산 점수
+    await delay(600);
+    const phase2 = document.getElementById('phase-total');
+    const totalScoreEl = document.getElementById('total-score-value');
+    if (phase2 && totalScoreEl) {
+      phase2.classList.add('visible');
+      await this.animateNumber(totalScoreEl, 0, partyScore, 1000);
+      this.audio.playSFX('MERGE');
+    }
+
+    // Phase 3: 인원 배율 적용
+    await delay(500);
+    const phase3 = document.getElementById('phase-multiplier');
+    if (phase3) {
+      phase3.classList.add('visible');
+      this.audio.playSFX('DROP');
+    }
+
+    // Phase 4: 최종 점수
+    await delay(800);
+    const phase4 = document.getElementById('phase-final');
+    const finalScoreEl = document.getElementById('final-score-value');
+    const topContributors = document.getElementById('top-contributors');
+    const finalContainer = phase4?.querySelector('.final-score-container');
+
+    if (phase4 && finalScoreEl && topContributors) {
+      phase4.classList.add('visible');
+      await this.animateNumber(finalScoreEl, 0, finalScore, 1500);
+      finalContainer?.classList.add('visible');
+      this.audio.playSFX('MERGE');
+
+      // Top 3 표시
+      await delay(500);
+      const medals = ['🥇', '🥈', '🥉'];
+      const top3 = players.slice(0, 3);
+      topContributors.innerHTML = '<div class="phase-title">Top Contributors</div>' +
+        top3.map((p, i) => `
+          <span class="top-contributor-item">
+            <span class="medal">${medals[i]}</span>${p.name}
+          </span>
+        `).join('');
+    }
+
+    // Play Again 버튼 표시
+    await delay(600);
+    const playAgainBtn = document.getElementById('play-again-btn');
+    if (playAgainBtn) {
+      playAgainBtn.classList.add('visible');
+    }
+  }
+
+  private animateNumber(element: HTMLElement, start: number, end: number, duration: number): Promise<void> {
+    return new Promise(resolve => {
+      const startTime = performance.now();
+      const update = (currentTime: number) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // easeOutExpo
+        const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+        const current = Math.floor(start + (end - start) * eased);
+
+        element.textContent = current.toLocaleString();
+
+        if (progress < 1) {
+          requestAnimationFrame(update);
+        } else {
+          resolve();
+        }
+      };
+      requestAnimationFrame(update);
+    });
   }
 
   private gameLoop = (): void => {
@@ -979,6 +1250,7 @@ export class MultiplayerGame {
 
   start(): void {
     this.isRunning = true;
+    this.audio.playBGM('MAIN');
     this.gameLoop();
 
     // 이미 playing 상태면 바로 시작
@@ -992,5 +1264,6 @@ export class MultiplayerGame {
     this.isRunning = false;
     this.stopTimer();
     this.stopMoving();
+    this.audio.stopBGM();
   }
 }

@@ -1,8 +1,12 @@
 import { Lobby } from './ui/Lobby';
 import { NetworkManager, GameSync } from './network';
 import { MultiplayerGame } from './game/MultiplayerGame';
+import { AudioControl } from './ui/AudioControl';
 
 const appContainer = document.getElementById('app')!;
+
+// 모든 페이지에서 표시되는 오디오 컨트롤
+new AudioControl();
 
 const lobby = new Lobby(appContainer);
 

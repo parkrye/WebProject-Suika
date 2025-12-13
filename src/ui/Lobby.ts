@@ -332,7 +332,7 @@ export class Lobby {
         .map(
           (room) => `
         <div class="room-item">
-          <span>${room.id.substring(0, 8)}... (${Object.keys(room.players).length}/6)</span>
+          <span>${room.id.substring(0, 8)}... (${Object.keys(room.players).length}/10)</span>
           <button class="btn btn-primary join-room-item" data-room-id="${room.id}">Join</button>
         </div>
       `

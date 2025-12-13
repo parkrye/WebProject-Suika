@@ -8,6 +8,7 @@ export interface FruitData {
   radius: number;
   color: string;
   score: number;
+  image: string;
 }
 
 export interface Player {
