@@ -1,6 +1,6 @@
 import Matter from 'matter-js';
 import { GameSync, type GameSyncEvent } from '../network/GameSync';
-import type { RoomPlayer, FruitState } from '../network/types';
+import type { RoomPlayer, FruitState, RoomState } from '../network/types';
 
 // 과일 크기별 데이터
 const FRUIT_SIZES = [
@@ -145,18 +145,65 @@ export class MultiplayerGame {
     // Firebase에서 과일 상태 업데이트
     this.remoteFruits = room.fruits || {};
 
-    // 호스트가 아니면 Firebase 상태를 로컬 물리에 반영
-    if (!this.sync.isHost) {
+    // 서버의 maxFruitSize 동기화 (모든 플레이어)
+    if (room.maxFruitSize > this.maxFruitSize) {
+      this.maxFruitSize = room.maxFruitSize;
+    }
+
+    // 호스트 부재 감지 및 승격 처리
+    if (this.sync.shouldBecomeHost) {
+      console.log('[Game] 호스트 부재 감지, 새 호스트로 승격 시도');
+      this.sync.promoteToHost();
+      return; // 승격 후 다음 room_update에서 처리
+    }
+
+    if (this.sync.isHost) {
+      // 호스트: Firebase에 새로 추가된 과일만 물리 엔진에 추가 (비호스트가 드롭한 과일)
+      this.addNewFruitsFromRemote();
+
+      // 호스트: 연결 해제된 플레이어 감지 및 정리
+      this.checkAndCleanupDisconnectedPlayers(room);
+    } else {
+      // 비호스트: Firebase 상태를 로컬에 반영
       this.syncFruitsFromRemote();
+    }
+  }
+
+  // 호스트 전용: players와 playerOrder 불일치 감지 및 정리
+  private checkAndCleanupDisconnectedPlayers(room: RoomState): void {
+    const activePlayers = Object.keys(room.players);
+    const hasDisconnected = room.playerOrder.some(
+      (id: string) => !activePlayers.includes(id)
+    );
+
+    if (hasDisconnected) {
+      console.log('[Host] 연결 해제된 플레이어 감지, 정리 중...');
+      this.sync.cleanupDisconnectedPlayers();
+    }
+  }
+
+  // 호스트 전용: 비호스트가 드롭한 새 과일만 물리 엔진에 추가
+  private addNewFruitsFromRemote(): void {
+    for (const [id, fruitState] of Object.entries(this.remoteFruits)) {
+      if (!this.fruits.has(id)) {
+        // 새 과일 생성 (비호스트가 드롭한 것)
+        console.log('[Host] 비호스트 과일 추가:', id);
+        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
+      }
+      // 기존 과일 위치는 업데이트하지 않음 (호스트가 물리 시뮬레이션 권위자)
     }
   }
 
   private syncFruitsFromRemote(): void {
     const remoteIds = new Set(Object.keys(this.remoteFruits));
 
-    // 원격에 없는 로컬 과일 제거
+    // 원격에 없는 로컬 과일 제거 (단, 방금 드롭한 과일은 보호)
     for (const [id, body] of this.fruits) {
       if (!remoteIds.has(id)) {
+        // 내가 방금 드롭한 과일은 Firebase 동기화 완료까지 보호
+        if (id === this.droppedFruitId) {
+          continue;
+        }
         Matter.Composite.remove(this.engine.world, body);
         this.fruits.delete(id);
       }

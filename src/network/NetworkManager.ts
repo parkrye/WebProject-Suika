@@ -8,6 +8,7 @@ import {
   remove,
   update,
   off,
+  runTransaction,
   DatabaseReference,
 } from 'firebase/database';
 import { database } from './firebase';
@@ -197,19 +198,24 @@ export class NetworkManager {
     if (!this.currentRoomId) return;
 
     const roomRef = ref(database, `rooms/${this.currentRoomId}`);
-    const snapshot = await get(roomRef);
-    if (!snapshot.exists()) return;
 
-    const roomState = snapshot.val() as RoomState;
-    const nextIndex = (roomState.currentPlayerIndex + 1) % roomState.playerOrder.length;
+    // 트랜잭션으로 Race Condition 방지
+    await runTransaction(roomRef, (currentData) => {
+      if (!currentData) return currentData;
 
-    await update(roomRef, {
-      currentPlayerIndex: nextIndex,
-      turnStartTime: Date.now(),
-      currentFruit: {
-        size: nextFruitSize,
-        x: 200,
-      },
+      const roomState = currentData as RoomState;
+      const playerOrderLength = roomState.playerOrder?.length || 1;
+      const nextIndex = (roomState.currentPlayerIndex + 1) % playerOrderLength;
+
+      return {
+        ...roomState,
+        currentPlayerIndex: nextIndex,
+        turnStartTime: Date.now(),
+        currentFruit: {
+          size: nextFruitSize,
+          x: 200,
+        },
+      };
     });
   }
 
@@ -278,6 +284,36 @@ export class NetworkManager {
     return host?.id === this.playerId;
   }
 
+  // 호스트가 없는지 확인 (연결 해제됨)
+  hasNoHost(): boolean {
+    if (!this.currentRoomState) return false;
+    const players = Object.values(this.currentRoomState.players);
+    return !players.some(p => p.isHost);
+  }
+
+  // 자신이 새 호스트가 되어야 하는지 확인 (playerOrder 첫 번째)
+  shouldBecomeHost(): boolean {
+    if (!this.currentRoomState) return false;
+    if (!this.hasNoHost()) return false;
+
+    // playerOrder에서 실제로 존재하는 첫 번째 플레이어가 새 호스트
+    const activePlayers = Object.keys(this.currentRoomState.players);
+    const firstActivePlayer = this.currentRoomState.playerOrder.find(
+      (id: string) => activePlayers.includes(id)
+    );
+    return firstActivePlayer === this.playerId;
+  }
+
+  // 자신을 호스트로 승격
+  async promoteToHost(): Promise<void> {
+    if (!this.currentRoomId) return;
+
+    console.log('[PromoteToHost] 새 호스트로 승격:', this.playerId);
+    await update(ref(database, `rooms/${this.currentRoomId}/players/${this.playerId}`), {
+      isHost: true,
+    });
+  }
+
   async endGame(): Promise<void> {
     if (!this.currentRoomId) return;
 
@@ -289,18 +325,112 @@ export class NetworkManager {
   async leaveRoom(): Promise<void> {
     if (!this.currentRoomId || !this.roomRef) return;
 
+    const roomId = this.currentRoomId;
+    const leavingPlayerId = this.playerId;
+    const wasHost = this.isHost();
+
     off(this.roomRef);
 
-    await remove(ref(database, `rooms/${this.currentRoomId}/players/${this.playerId}`));
+    // 플레이어 제거
+    await remove(ref(database, `rooms/${roomId}/players/${leavingPlayerId}`));
 
-    const snapshot = await get(ref(database, `rooms/${this.currentRoomId}/players`));
-    if (!snapshot.exists() || Object.keys(snapshot.val()).length === 0) {
-      await remove(ref(database, `rooms/${this.currentRoomId}`));
+    // playerOrder에서도 제거 및 currentPlayerIndex 조정
+    const snapshot = await get(ref(database, `rooms/${roomId}`));
+    if (snapshot.exists()) {
+      const roomState = snapshot.val() as RoomState;
+      const newPlayerOrder = roomState.playerOrder.filter((id: string) => id !== leavingPlayerId);
+
+      if (newPlayerOrder.length === 0) {
+        // 모든 플레이어가 나감 - 방 삭제
+        await remove(ref(database, `rooms/${roomId}`));
+      } else {
+        // playerOrder 업데이트 및 currentPlayerIndex 조정
+        let newIndex = roomState.currentPlayerIndex;
+        const leavingIndex = roomState.playerOrder.indexOf(leavingPlayerId);
+
+        if (leavingIndex !== -1 && leavingIndex <= roomState.currentPlayerIndex) {
+          // 퇴장한 플레이어가 현재 또는 이전 인덱스면 조정
+          newIndex = Math.max(0, roomState.currentPlayerIndex - 1);
+        }
+        // 인덱스가 배열 범위를 벗어나지 않도록
+        newIndex = newIndex % newPlayerOrder.length;
+
+        const updates: Record<string, unknown> = {
+          playerOrder: newPlayerOrder,
+          currentPlayerIndex: newIndex,
+        };
+
+        // 호스트가 나가면 새 호스트 선정 (playerOrder의 첫 번째 플레이어)
+        if (wasHost) {
+          const newHostId = newPlayerOrder[0];
+          updates[`players/${newHostId}/isHost`] = true;
+          console.log('[LeaveRoom] 새 호스트 선정:', newHostId);
+        }
+
+        await update(ref(database, `rooms/${roomId}`), updates);
+      }
     }
 
     this.currentRoomId = null;
     this.roomRef = null;
     this.roomListeners = [];
+  }
+
+  // 호스트 전용: players와 playerOrder 불일치 정리 (연결 해제된 플레이어 처리)
+  async cleanupDisconnectedPlayers(): Promise<void> {
+    if (!this.currentRoomId || !this.isHost()) return;
+
+    const snapshot = await get(ref(database, `rooms/${this.currentRoomId}`));
+    if (!snapshot.exists()) return;
+
+    const roomState = snapshot.val() as RoomState;
+    const activePlayers = Object.keys(roomState.players);
+    const disconnectedPlayers = roomState.playerOrder.filter(
+      (id: string) => !activePlayers.includes(id)
+    );
+
+    if (disconnectedPlayers.length === 0) return;
+
+    console.log('[Host] 연결 해제된 플레이어 정리:', disconnectedPlayers);
+
+    const newPlayerOrder = roomState.playerOrder.filter(
+      (id: string) => activePlayers.includes(id)
+    );
+
+    if (newPlayerOrder.length === 0) {
+      // 모든 플레이어가 나감
+      await remove(ref(database, `rooms/${this.currentRoomId}`));
+      return;
+    }
+
+    // currentPlayerIndex 조정
+    let newIndex = roomState.currentPlayerIndex;
+    for (const disconnectedId of disconnectedPlayers) {
+      const disconnectedIndex = roomState.playerOrder.indexOf(disconnectedId);
+      if (disconnectedIndex !== -1 && disconnectedIndex <= newIndex) {
+        newIndex = Math.max(0, newIndex - 1);
+      }
+    }
+    newIndex = newIndex % newPlayerOrder.length;
+
+    // 현재 턴 플레이어가 나갔으면 새 턴 시작
+    const currentTurnPlayer = roomState.playerOrder[roomState.currentPlayerIndex];
+    const needNewTurn = disconnectedPlayers.includes(currentTurnPlayer);
+
+    const updates: Record<string, unknown> = {
+      playerOrder: newPlayerOrder,
+      currentPlayerIndex: newIndex,
+    };
+
+    if (needNewTurn && roomState.status === 'playing') {
+      updates.turnStartTime = Date.now();
+      updates.currentFruit = {
+        size: Math.floor(Math.random() * Math.min(roomState.maxFruitSize, 5)) + 1,
+        x: 200,
+      };
+    }
+
+    await update(ref(database, `rooms/${this.currentRoomId}`), updates);
   }
 
   async getRoomList(): Promise<RoomState[]> {

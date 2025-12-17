@@ -57,6 +57,18 @@ export class GameSync {
     return this.network.isHost();
   }
 
+  get hasNoHost(): boolean {
+    return this.network.hasNoHost();
+  }
+
+  get shouldBecomeHost(): boolean {
+    return this.network.shouldBecomeHost();
+  }
+
+  async promoteToHost(): Promise<void> {
+    await this.network.promoteToHost();
+  }
+
   private handleRoomUpdate(room: RoomState): void {
     const prevRoom = this.lastRoomState;
     this.currentRoom = room;
@@ -199,5 +211,9 @@ export class GameSync {
 
   async syncAllFruits(fruits: Record<string, { x: number; y: number; size: number }>): Promise<void> {
     await this.network.syncAllFruits(fruits);
+  }
+
+  async cleanupDisconnectedPlayers(): Promise<void> {
+    await this.network.cleanupDisconnectedPlayers();
   }
 }
