@@ -661,6 +661,7 @@ export class MultiplayerGame {
   }
 
   private renderRemoteFruits(ctx: CanvasRenderingContext2D): void {
+    // 원격 과일 렌더링
     for (const fruitState of Object.values(this.remoteFruits)) {
       const data = FRUIT_SIZES[fruitState.size - 1] || FRUIT_SIZES[0];
 
@@ -677,6 +678,32 @@ export class MultiplayerGame {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(fruitState.size.toString(), fruitState.x, fruitState.y);
+    }
+
+    // 방금 드롭한 과일이 원격에 아직 없으면 로컬에서 렌더링
+    if (this.droppedFruitId && !this.remoteFruits[this.droppedFruitId]) {
+      const droppedFruit = this.fruits.get(this.droppedFruitId);
+      if (droppedFruit) {
+        const { x, y } = droppedFruit.position;
+        const parsed = this.parseFruitLabel(droppedFruit.label);
+        if (parsed) {
+          const data = FRUIT_SIZES[parsed.size - 1] || FRUIT_SIZES[0];
+
+          ctx.beginPath();
+          ctx.arc(x, y, data.radius, 0, Math.PI * 2);
+          ctx.fillStyle = data.color;
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff44';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(parsed.size.toString(), x, y);
+        }
+      }
     }
   }
 
