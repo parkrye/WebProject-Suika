@@ -1,6 +1,6 @@
 import Matter from 'matter-js';
 import { GameSync, type GameSyncEvent } from '../network/GameSync';
-import type { RoomPlayer, FruitState } from '../network/types';
+import type { RoomPlayer, FruitState, RoomState } from '../network/types';
 import { FRUIT_DATA, MAX_FRUIT_SIZE, SETTLE_FRAMES } from '../core/config';
 import { AudioManager } from '../core/AudioManager';
 
@@ -1221,7 +1221,7 @@ export class MultiplayerGame {
         const { x, y } = droppedFruit.position;
         const parsed = this.parseFruitLabel(droppedFruit.label);
         if (parsed) {
-          const data = FRUIT_SIZES[parsed.size - 1] || FRUIT_SIZES[0];
+          const data = FRUIT_DATA[parsed.size - 1] || FRUIT_DATA[0];
 
           ctx.beginPath();
           ctx.arc(x, y, data.radius, 0, Math.PI * 2);
