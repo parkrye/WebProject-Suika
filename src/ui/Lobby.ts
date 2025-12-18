@@ -14,7 +14,7 @@ export class Lobby {
   private render(): void {
     this.container.innerHTML = `
       <div class="lobby">
-        <h1 class="lobby-title">Multi Suika Game</h1>
+        <h1 class="lobby-title">Fireworks Festival</h1>
 
         <div id="name-input-section" class="lobby-section">
           <input type="text" id="player-name" placeholder="Enter your name" maxlength="12" />
@@ -68,24 +68,31 @@ export class Lobby {
         min-height: 100vh;
       }
       .lobby-title {
-        font-size: 48px;
+        font-size: 52px;
         margin-bottom: 40px;
-        color: #e94560;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        background: linear-gradient(135deg, #ff6b9d, #ffcc00, #ff9a56);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        text-shadow: none;
+        filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
       }
       .lobby-section {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 15px;
-        background: rgba(0,0,0,0.3);
+        background: linear-gradient(135deg, rgba(30,20,50,0.8), rgba(50,30,70,0.8));
         padding: 30px;
         border-radius: 16px;
         min-width: 300px;
+        border: 2px solid rgba(255,107,157,0.3);
+        box-shadow: 0 0 30px rgba(255,107,157,0.2);
       }
       .welcome-text {
         font-size: 18px;
         margin-bottom: 10px;
+        color: #ffcc00;
       }
       .btn {
         padding: 12px 24px;
@@ -93,7 +100,7 @@ export class Lobby {
         border: none;
         border-radius: 8px;
         cursor: pointer;
-        transition: transform 0.2s, opacity 0.2s;
+        transition: transform 0.2s, box-shadow 0.2s;
         min-width: 150px;
       }
       .btn:hover {
@@ -105,33 +112,43 @@ export class Lobby {
         transform: none;
       }
       .btn-primary {
-        background: #e94560;
+        background: linear-gradient(135deg, #ff6b9d, #ff9a56);
         color: white;
+        box-shadow: 0 0 15px rgba(255,107,157,0.4);
+      }
+      .btn-primary:hover {
+        box-shadow: 0 0 25px rgba(255,107,157,0.6);
       }
       .btn-secondary {
-        background: #4a4a6a;
+        background: linear-gradient(135deg, #4a4a7a, #3a3a6a);
         color: white;
       }
       .btn-success {
-        background: #4BC0C0;
+        background: linear-gradient(135deg, #4BC0C0, #36A2EB);
         color: white;
+        box-shadow: 0 0 15px rgba(75,192,192,0.4);
+      }
+      .btn-success:hover {
+        box-shadow: 0 0 25px rgba(75,192,192,0.6);
       }
       .btn-danger {
-        background: #ff4757;
+        background: linear-gradient(135deg, #ff4757, #ff6b81);
         color: white;
       }
       input[type="text"] {
         padding: 12px 16px;
         font-size: 16px;
-        border: 2px solid #4a4a6a;
+        border: 2px solid rgba(255,107,157,0.3);
         border-radius: 8px;
-        background: #2a2a3e;
+        background: rgba(30,20,50,0.8);
         color: white;
         outline: none;
         width: 200px;
+        transition: border-color 0.2s, box-shadow 0.2s;
       }
       input[type="text"]:focus {
-        border-color: #e94560;
+        border-color: #ff6b9d;
+        box-shadow: 0 0 15px rgba(255,107,157,0.3);
       }
       .room-list {
         display: flex;
@@ -146,8 +163,9 @@ export class Lobby {
         justify-content: space-between;
         align-items: center;
         padding: 12px;
-        background: #2a2a3e;
+        background: rgba(40,30,60,0.8);
         border-radius: 8px;
+        border: 1px solid rgba(255,107,157,0.2);
       }
       .room-item button {
         padding: 6px 12px;
@@ -165,14 +183,17 @@ export class Lobby {
         justify-content: space-between;
         align-items: center;
         padding: 10px 15px;
-        background: #2a2a3e;
+        background: rgba(40,30,60,0.8);
         border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
       }
       .player-item.ready {
         border: 2px solid #4BC0C0;
+        box-shadow: 0 0 10px rgba(75,192,192,0.3);
       }
-      .player-item.host::before {
-        content: "👑 ";
+      .player-item.host {
+        border: 2px solid #ffcc00;
+        box-shadow: 0 0 10px rgba(255,204,0,0.3);
       }
       .waiting-room-actions {
         display: flex;
@@ -185,19 +206,22 @@ export class Lobby {
         left: 0;
         width: 100%;
         height: 100%;
-        background: rgba(0,0,0,0.7);
+        background: rgba(0,0,0,0.8);
         display: flex;
         justify-content: center;
         align-items: center;
+        z-index: 100;
       }
       .modal-content {
-        background: #1a1a2e;
+        background: linear-gradient(135deg, #1a1a3a, #2a1a4a);
         padding: 30px;
         border-radius: 16px;
         display: flex;
         flex-direction: column;
         gap: 15px;
         align-items: center;
+        border: 2px solid rgba(255,107,157,0.3);
+        box-shadow: 0 0 40px rgba(255,107,157,0.3);
       }
       .modal-actions {
         display: flex;
@@ -308,7 +332,7 @@ export class Lobby {
         .map(
           (room) => `
         <div class="room-item">
-          <span>${room.id.substring(0, 8)}... (${Object.keys(room.players).length}/6)</span>
+          <span>${room.id.substring(0, 8)}... (${Object.keys(room.players).length}/10)</span>
           <button class="btn btn-primary join-room-item" data-room-id="${room.id}">Join</button>
         </div>
       `
@@ -362,7 +386,7 @@ export class Lobby {
         (player) => `
       <div class="player-item ${player.isReady ? 'ready' : ''} ${player.isHost ? 'host' : ''}">
         <span>${player.name}</span>
-        <span>${player.isReady ? '✓ Ready' : 'Waiting...'}</span>
+        <span>${player.isHost ? '👑 Host' : player.isReady ? '✓ Ready' : 'Waiting...'}</span>
       </div>
     `
       )
@@ -370,13 +394,20 @@ export class Lobby {
 
     const currentPlayer = room.players[this.network!.id];
     const startBtn = document.getElementById('start-btn') as HTMLButtonElement;
+    const readyBtn = document.getElementById('ready-btn') as HTMLButtonElement;
 
     if (currentPlayer?.isHost) {
-      const allReady = players.every((p) => p.isReady || p.isHost);
-      const enoughPlayers = players.length >= 1;
+      // 방장은 Ready 버튼 숨김, Start 버튼만 표시
+      readyBtn.style.display = 'none';
       startBtn.style.display = 'block';
-      startBtn.disabled = !allReady || !enoughPlayers;
+
+      // 혼자면 바로 시작 가능, 아니면 다른 플레이어 모두 준비되면 활성화
+      const otherPlayers = players.filter((p) => !p.isHost);
+      const canStart = otherPlayers.length === 0 || otherPlayers.every((p) => p.isReady);
+      startBtn.disabled = !canStart;
     } else {
+      // 일반 플레이어는 Ready 버튼 표시, Start 버튼 숨김
+      readyBtn.style.display = 'block';
       startBtn.style.display = 'none';
     }
   }

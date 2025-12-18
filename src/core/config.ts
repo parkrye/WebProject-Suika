@@ -8,19 +8,22 @@ export const GAME_CONFIG = {
   GRAVITY: 1,
 } as const;
 
+// 불꽃놀이 테마 색상
 export const FRUIT_DATA: FruitData[] = [
-  { size: 1, radius: 15, color: '#FF6B6B', score: 0 },
-  { size: 2, radius: 22, color: '#FF8E53', score: 10 },
-  { size: 3, radius: 30, color: '#FFCD56', score: 30 },
-  { size: 4, radius: 40, color: '#4BC0C0', score: 80 },
-  { size: 5, radius: 52, color: '#36A2EB', score: 150 },
-  { size: 6, radius: 65, color: '#9966FF', score: 250 },
-  { size: 7, radius: 80, color: '#FF6384', score: 400 },
-  { size: 8, radius: 95, color: '#C9CBCF', score: 600 },
-  { size: 9, radius: 112, color: '#7CFC00', score: 850 },
-  { size: 10, radius: 130, color: '#FFD700', score: 1200 },
-  { size: 11, radius: 150, color: '#FF1493', score: 1600 },
+  { size: 1, radius: 15, color: '#FF6B9D', score: 0, image: '/fireworks/firework_1.png' },
+  { size: 2, radius: 22, color: '#FF9A56', score: 10, image: '/fireworks/firework_2.png' },
+  { size: 3, radius: 30, color: '#FFCC00', score: 30, image: '/fireworks/firework_3.png' },
+  { size: 4, radius: 40, color: '#4BC0C0', score: 80, image: '/fireworks/firework_4.png' },
+  { size: 5, radius: 52, color: '#36A2EB', score: 150, image: '/fireworks/firework_5.png' },
+  { size: 6, radius: 65, color: '#A855F7', score: 250, image: '/fireworks/firework_6.png' },
+  { size: 7, radius: 80, color: '#EC4899', score: 400, image: '/fireworks/firework_7.png' },
+  { size: 8, radius: 95, color: '#10B981', score: 600, image: '/fireworks/firework_8.png' },
+  { size: 9, radius: 112, color: '#F59E0B', score: 850, image: '/fireworks/firework_9.png' },
+  { size: 10, radius: 130, color: '#FFD700', score: 1200, image: '/fireworks/firework_10.png' },
 ];
+
+export const MAX_FRUIT_SIZE = 10;
+export const SETTLE_FRAMES = 15; // 과일 안정화 대기 프레임 (거의 즉시)
 
 export function getFruitData(size: number): FruitData {
   const index = Math.min(size - 1, FRUIT_DATA.length - 1);
