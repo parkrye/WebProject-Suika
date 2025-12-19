@@ -47,6 +47,10 @@ export class MultiplayerGame {
   private currentFruitSize = 1;
   private droppedFruitId: string | null = null;
 
+  // 비호스트용: 드롭 요청 후 로컬 예측 렌더링용 임시 과일
+  private pendingDropFruitId: string | null = null;
+  private pendingDropSynced = false; // Firebase에서 첫 동기화 완료 여부
+
   // 타이머
   private timeRemaining = TURN_TIME;
   private timerInterval: number | null = null;
@@ -264,12 +268,31 @@ export class MultiplayerGame {
   }
 
   private syncFruitsFromRemote(): void {
-    // 비호스트: Firebase 상태를 그대로 반영 (물리 엔진은 렌더링용으로만 사용)
+    // 비호스트: Firebase 상태를 그대로 반영
     const remoteIds = new Set(Object.keys(this.remoteFruits));
+    const remoteCount = remoteIds.size;
+
+    // 임시 과일이 있고 아직 동기화되지 않았는데, Firebase에서 새 과일이 왔으면 동기화 완료
+    if (this.pendingDropFruitId && !this.pendingDropSynced && remoteCount > 0) {
+      // Firebase에서 첫 번째 과일 업데이트가 왔으면 임시 과일 제거
+      this.pendingDropSynced = true;
+      console.log('[Sync] Firebase 동기화 완료, 임시 과일 제거 예정:', this.pendingDropFruitId);
+    }
 
     // 원격에 없는 로컬 과일 제거
     for (const [id, body] of this.fruits) {
       if (!remoteIds.has(id)) {
+        // 임시 과일은 동기화 완료 후에만 제거
+        if (id === this.pendingDropFruitId) {
+          if (this.pendingDropSynced) {
+            console.log('[Sync] 임시 과일 제거:', id);
+            Matter.Composite.remove(this.engine.world, body);
+            this.fruits.delete(id);
+            this.pendingDropFruitId = null;
+          }
+          // 아직 동기화 안됐으면 임시 과일 유지
+          continue;
+        }
         Matter.Composite.remove(this.engine.world, body);
         this.fruits.delete(id);
       }
@@ -283,7 +306,7 @@ export class MultiplayerGame {
         Matter.Body.setPosition(existingBody, { x: fruitState.x, y: fruitState.y });
         Matter.Body.setVelocity(existingBody, { x: 0, y: 0 });
       } else {
-        // 새 과일 생성 (렌더링용)
+        // 새 과일 생성
         this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
       }
     }
@@ -316,8 +339,18 @@ export class MultiplayerGame {
     this.turnPhase = 'ready';
     this.currentFruitSize = fruitSize;
     this.dropX = fruitX;
-    // droppedFruitId는 Firebase에 동기화될 때까지 유지 (syncFruitsFromRemote에서 정리)
     this.settleCheckTimer = 0;
+
+    // 이전 턴의 임시 과일 상태 정리
+    if (this.pendingDropFruitId) {
+      const tempFruit = this.fruits.get(this.pendingDropFruitId);
+      if (tempFruit) {
+        Matter.Composite.remove(this.engine.world, tempFruit);
+        this.fruits.delete(this.pendingDropFruitId);
+      }
+      this.pendingDropFruitId = null;
+      this.pendingDropSynced = false;
+    }
     this.dropEnabled = false;
 
     // 내 턴이면 타이머 시작 + 1초 뒤 드롭 활성화
@@ -442,8 +475,14 @@ export class MultiplayerGame {
       // Firebase에 과일 동기화
       this.sync.dropFruit(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
     } else {
-      // 비호스트: 드롭 요청만 전송 (호스트가 실제 drop 수행)
+      // 비호스트: 드롭 요청 전송 + 로컬 예측 렌더링용 임시 과일 생성
       console.log('[Drop] 비호스트가 드롭 요청 전송:', 'x:', this.dropX, 'size:', this.currentFruitSize);
+
+      // 로컬 예측 렌더링용 임시 과일 생성 (부드러운 낙하 표시)
+      const tempFruitId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      this.pendingDropFruitId = tempFruitId;
+      this.pendingDropSynced = false;
+      this.createFruitWithId(tempFruitId, this.dropX, DROP_Y, this.currentFruitSize);
 
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
@@ -1160,7 +1199,8 @@ export class MultiplayerGame {
 
     this.frameCount++;
 
-    // 호스트만 물리 엔진 업데이트
+    // 호스트: 전체 물리 시뮬레이션
+    // 비호스트: 임시 과일 물리 시뮬레이션 (예측 렌더링용)
     if (this.sync.isHost) {
       Matter.Engine.update(this.engine, 1000 / 60);
 
@@ -1171,6 +1211,9 @@ export class MultiplayerGame {
 
       // 게임오버 검사 (2초 동안 라인 위에 있으면 게임오버)
       this.updateGameOverCheck();
+    } else if (this.pendingDropFruitId && !this.pendingDropSynced) {
+      // 비호스트: 임시 과일이 있고 아직 동기화되지 않았을 때만 물리 업데이트
+      Matter.Engine.update(this.engine, 1000 / 60);
     }
 
     // settling 상태에서 안정화 체크 (내 턴일 때)
@@ -1296,7 +1339,33 @@ export class MultiplayerGame {
   }
 
   private renderRemoteFruits(ctx: CanvasRenderingContext2D): void {
-    // 비호스트: Firebase에서 받은 과일 상태만 렌더링 (호스트가 물리 시뮬레이션 전담)
+    // 1. 임시 과일 렌더링 (아직 동기화되지 않은 경우, 로컬 물리 엔진 위치 사용)
+    if (this.pendingDropFruitId && !this.pendingDropSynced) {
+      const tempFruit = this.fruits.get(this.pendingDropFruitId);
+      if (tempFruit) {
+        const { x, y } = tempFruit.position;
+        const parsed = this.parseFruitLabel(tempFruit.label);
+        if (parsed) {
+          const data = FRUIT_DATA[parsed.size - 1] || FRUIT_DATA[0];
+
+          ctx.beginPath();
+          ctx.arc(x, y, data.radius, 0, Math.PI * 2);
+          ctx.fillStyle = data.color;
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff44';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.fillStyle = '#fff';
+          ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(parsed.size.toString(), x, y);
+        }
+      }
+    }
+
+    // 2. Firebase에서 받은 과일 상태 렌더링
     for (const [, fruitState] of Object.entries(this.remoteFruits)) {
       const data = FRUIT_DATA[fruitState.size - 1] || FRUIT_DATA[0];
 
