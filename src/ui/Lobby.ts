@@ -328,7 +328,14 @@ export class Lobby {
         return;
       }
 
-      roomList.innerHTML = rooms
+      const validRooms = rooms.filter((room) => room && room.players && Object.keys(room.players).length > 0);
+
+      if (validRooms.length === 0) {
+        roomList.innerHTML = '<p>No rooms available</p>';
+        return;
+      }
+
+      roomList.innerHTML = validRooms
         .map(
           (room) => `
         <div class="room-item">
@@ -351,6 +358,7 @@ export class Lobby {
         });
       });
     } catch (error) {
+      console.error('[Lobby] Failed to load rooms:', error);
       roomList.innerHTML = '<p>Failed to load rooms</p>';
     }
   }
