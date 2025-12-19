@@ -644,27 +644,30 @@ export class MultiplayerGame {
   private updateGameOverCheck(): void {
     if (!this.sync.isHost) return;
 
-    // 드롭 후 3초간은 게임오버 체크 안함
-    const framesSinceLastDrop = this.frameCount - this.lastDropFrame;
-    if (framesSinceLastDrop < DROP_GRACE_FRAMES) {
-      this.gameOverTimer = 0;
-      this.isOverLine = false;
-      return;
-    }
-
     const overLine = this.checkFruitsOverLine();
+    const framesSinceLastDrop = this.frameCount - this.lastDropFrame;
+    const graceActive = framesSinceLastDrop < DROP_GRACE_FRAMES;
 
     if (overLine) {
-      this.gameOverTimer++;
-      this.isOverLine = true;
+      // 선 위에 오브젝트가 있음
+      if (this.gameOverTimer > 0) {
+        // 이미 카운트다운 진행중이면 계속 (새 드롭과 무관하게)
+        this.gameOverTimer++;
+        this.isOverLine = true;
+      } else if (!graceActive) {
+        // 카운트다운 시작 (3초 유예 기간 지난 후에만)
+        this.gameOverTimer = 1;
+        this.isOverLine = true;
+      }
+      // graceActive && gameOverTimer === 0 이면 아직 유예 기간이므로 카운트다운 시작 안함
 
-      // 2초 동안 계속 라인 위에 있으면 게임오버
+      // 게임오버 체크
       if (this.gameOverTimer >= GAME_OVER_CHECK_FRAMES) {
         console.log('[GameOver] 2초 동안 라인 위에 있어서 게임오버');
         this.sync.reportGameOver();
       }
     } else {
-      // 라인 아래로 내려가면 타이머 리셋
+      // 선 아래로 내려가면 카운트다운 종료
       this.gameOverTimer = 0;
       this.isOverLine = false;
     }
