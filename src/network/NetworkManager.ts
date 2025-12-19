@@ -8,7 +8,6 @@ import {
   remove,
   update,
   off,
-  runTransaction,
   DatabaseReference,
 } from 'firebase/database';
 import { database } from './firebase';
@@ -217,27 +216,20 @@ export class NetworkManager {
   }
 
   async nextTurn(nextFruitSize: number): Promise<void> {
-    if (!this.currentRoomId) return;
+    if (!this.currentRoomId || !this.currentRoomState) return;
 
-    const roomRef = ref(database, `rooms/${this.currentRoomId}`);
+    // 현재 상태에서 다음 인덱스 계산
+    const playerOrderLength = this.currentRoomState.playerOrder?.length || 1;
+    const nextIndex = (this.currentRoomState.currentPlayerIndex + 1) % playerOrderLength;
 
-    // 트랜잭션으로 Race Condition 방지
-    await runTransaction(roomRef, (currentData) => {
-      if (!currentData) return currentData;
-
-      const roomState = currentData as RoomState;
-      const playerOrderLength = roomState.playerOrder?.length || 1;
-      const nextIndex = (roomState.currentPlayerIndex + 1) % playerOrderLength;
-
-      return {
-        ...roomState,
-        currentPlayerIndex: nextIndex,
-        turnStartTime: Date.now(),
-        currentFruit: {
-          size: nextFruitSize,
-          x: 200,
-        },
-      };
+    // 일반 update 사용 (트랜잭션 충돌 방지)
+    await update(ref(database, `rooms/${this.currentRoomId}`), {
+      currentPlayerIndex: nextIndex,
+      turnStartTime: Date.now(),
+      currentFruit: {
+        size: nextFruitSize,
+        x: 200,
+      },
     });
   }
 
