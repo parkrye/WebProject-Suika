@@ -37,7 +37,6 @@ export class MultiplayerGame {
   private fruits = new Map<string, Matter.Body>();
 
   // 게임 상태
-  private score = 0;
   private maxFruitSize = 1;
   private isRunning = false;
 
@@ -46,6 +45,7 @@ export class MultiplayerGame {
   private dropX = WIDTH / 2;
   private currentFruitSize = 1;
   private droppedFruitId: string | null = null;
+  private lastDropPlayerId: string | null = null; // 마지막 드롭한 플레이어 (합성 점수용)
 
   // 비호스트용: 드롭 요청 후 로컬 예측 렌더링용 임시 과일
   private pendingDropFruitId: string | null = null;
@@ -387,6 +387,7 @@ export class MultiplayerGame {
 
     // 드롭 프레임 기록
     this.lastDropFrame = this.frameCount;
+    this.lastDropPlayerId = playerId; // 합성 점수용
 
     // 고유 ID 생성
     const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -465,6 +466,7 @@ export class MultiplayerGame {
       // 호스트: 직접 과일 생성 및 물리 시뮬레이션
       const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       this.droppedFruitId = fruitId;
+      this.lastDropPlayerId = this.sync.playerId; // 합성 점수용
 
       console.log('[Drop] 호스트가 직접 과일 생성:', fruitId, 'x:', this.dropX, 'size:', this.currentFruitSize);
 
@@ -570,9 +572,8 @@ export class MultiplayerGame {
         if (newSize >= MAX_FRUIT_SIZE) {
           this.createFirework(midX, midY);
 
-          // 점수 추가 (크기 10 보너스)
+          // 점수 추가 (크기 10 보너스) - 마지막 드롭한 플레이어에게
           const scoreGain = FRUIT_DATA[MAX_FRUIT_SIZE - 1]?.score || 0;
-          this.score += scoreGain;
 
           // 최대 크기 업데이트
           if (MAX_FRUIT_SIZE > this.maxFruitSize) {
@@ -584,20 +585,19 @@ export class MultiplayerGame {
             this.droppedFruitId = null;
           }
 
-          // 서버에 점수 보고
+          // 마지막 드롭한 플레이어에게 점수 부여
           const room = this.sync.room;
-          if (room) {
+          if (room && this.lastDropPlayerId) {
             const newPartyScore = room.partyScore + scoreGain;
-            this.sync.reportScore(this.score, newPartyScore);
+            this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
           }
         } else {
           // 새 과일 생성
           const newFruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
           this.createFruitWithId(newFruitId, midX, midY, newSize);
 
-          // 점수 추가
+          // 점수 추가 - 마지막 드롭한 플레이어에게
           const scoreGain = FRUIT_DATA[newSize - 1]?.score || 0;
-          this.score += scoreGain;
 
           // 최대 크기 업데이트
           if (newSize > this.maxFruitSize) {
@@ -609,11 +609,11 @@ export class MultiplayerGame {
             this.droppedFruitId = newFruitId;
           }
 
-          // 서버에 점수 보고
+          // 마지막 드롭한 플레이어에게 점수 부여
           const room = this.sync.room;
-          if (room) {
+          if (room && this.lastDropPlayerId) {
             const newPartyScore = room.partyScore + scoreGain;
-            this.sync.reportScore(this.score, newPartyScore);
+            this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
           }
         }
 
@@ -1398,7 +1398,9 @@ export class MultiplayerGame {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(`Party: ${room?.partyScore || 0}`, 10, 10);
-    ctx.fillText(`My: ${this.score}`, 10, 28);
+    // Firebase에서 현재 플레이어의 점수 가져오기
+    const myScore = room?.players[this.sync.playerId]?.score || 0;
+    ctx.fillText(`My: ${myScore}`, 10, 28);
 
     // 호스트 표시
     if (this.sync.isHost) {

@@ -246,6 +246,19 @@ export class GameSync {
     await this.network.updateScore(this.network.id, score, partyScore);
   }
 
+  // 호스트 전용: 특정 플레이어의 점수 업데이트 (합성 점수용)
+  async reportPlayerScore(playerId: string, scoreGain: number, partyScore: number): Promise<void> {
+    if (!this.isHost) return;
+    const room = this.currentRoom;
+    if (!room) return;
+
+    const player = room.players[playerId];
+    if (!player) return;
+
+    const newScore = player.score + scoreGain;
+    await this.network.updateScore(playerId, newScore, partyScore);
+  }
+
   async nextTurn(nextFruitSize: number): Promise<void> {
     await this.network.nextTurn(nextFruitSize);
   }
