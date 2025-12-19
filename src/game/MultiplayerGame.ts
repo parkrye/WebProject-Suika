@@ -396,8 +396,8 @@ export class MultiplayerGame {
     // 물리 엔진에 과일 생성
     this.createFruitWithId(fruitId, x, DROP_Y, size);
 
-    // Firebase에 과일 동기화 (호스트가 직접 수행)
-    this.sync.dropFruit(fruitId, x, DROP_Y, size);
+    // Firebase에 과일 동기화 (호스트 권한으로 직접 수행, isMyTurn 체크 없음)
+    this.sync.hostAddFruit(fruitId, x, DROP_Y, size);
 
     // 드롭 요청 삭제
     this.sync.clearDropRequest();

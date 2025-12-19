@@ -219,6 +219,12 @@ export class GameSync {
     await this.network.clearDropRequest();
   }
 
+  // 호스트 전용: 비호스트의 드롭 요청 처리 시 과일 추가 (isMyTurn 체크 없음)
+  async hostAddFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
+    if (!this.isHost) return;
+    await this.network.dropFruit(fruitId, x, y, size);
+  }
+
   async reportMerge(
     removedId1: string,
     removedId2: string,
