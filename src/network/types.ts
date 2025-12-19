@@ -14,6 +14,14 @@ export interface FruitState {
   isDropped: boolean;
 }
 
+export interface DropRequest {
+  id: string;
+  playerId: string;
+  x: number;
+  size: number;
+  timestamp: number;
+}
+
 export interface RoomState {
   id: string;
   status: 'waiting' | 'playing' | 'ended';
@@ -28,6 +36,7 @@ export interface RoomState {
     size: number;
     x: number;
   } | null;
+  dropRequest?: DropRequest | null;
   createdAt: number;
 }
 

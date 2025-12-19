@@ -11,6 +11,8 @@ const GAME_OVER_Y = 100;
 const TURN_TIME = 10;
 const SYNC_INTERVAL = 5; // 호스트가 몇 프레임마다 동기화할지
 const GAME_OVER_CHECK_FRAMES = 120; // 게임오버 판정까지 2초 (60fps * 2)
+const DROP_GRACE_FRAMES = 180; // 드롭 후 3초 동안은 게임오버 체크 안함
+const DROP_DELAY_MS = 1000; // 턴 시작 후 드롭 버튼 활성화까지 1초
 
 type TurnPhase = 'waiting' | 'ready' | 'dropping' | 'settling';
 
@@ -49,6 +51,10 @@ export class MultiplayerGame {
   private timeRemaining = TURN_TIME;
   private timerInterval: number | null = null;
 
+  // 드롭 활성화 (턴 시작 1초 후)
+  private dropEnabled = false;
+  private dropDelayTimer: number | null = null;
+
   // 이동
   private moveInterval: number | null = null;
   private readonly MOVE_SPEED = 3;
@@ -61,12 +67,16 @@ export class MultiplayerGame {
   // Firebase에서 받은 과일 상태 (비호스트용)
   private remoteFruits: Record<string, FruitState> = {};
 
+  // 호스트가 삭제한 과일 ID (Firebase 동기화 지연으로 인한 재생성 방지)
+  private deletedFruitIds = new Set<string>();
+
   // 폭죽 파티클 시스템
   private particles: Particle[] = [];
 
   // 게임오버 판정 타이머
   private gameOverTimer = 0;
   private isOverLine = false;
+  private lastDropFrame = 0; // 마지막 드롭 프레임 (3초 후부터 게임오버 체크)
 
   // 도시 창문 패턴 (고정)
   private windowPattern: boolean[][] = [];
@@ -162,6 +172,9 @@ export class MultiplayerGame {
         case 'game_over':
           this.handleGameOver(event.partyScore);
           break;
+        case 'drop_request':
+          this.handleDropRequest(event.playerId, event.x, event.size);
+          break;
       }
     });
   }
@@ -223,26 +236,40 @@ export class MultiplayerGame {
 
   // 호스트 전용: 비호스트가 드롭한 새 과일만 물리 엔진에 추가
   private addNewFruitsFromRemote(): void {
+    const remoteCount = Object.keys(this.remoteFruits).length;
+    const localCount = this.fruits.size;
+    if (this.frameCount % 60 === 0 && remoteCount > 0) {
+      console.log('[Host] addNewFruitsFromRemote - remote:', remoteCount, 'local:', localCount);
+    }
+
     for (const [id, fruitState] of Object.entries(this.remoteFruits)) {
+      // 최근 삭제된 과일은 무시 (Firebase 동기화 지연으로 인한 재생성 방지)
+      if (this.deletedFruitIds.has(id)) {
+        continue;
+      }
       if (!this.fruits.has(id)) {
         // 새 과일 생성 (비호스트가 드롭한 것)
-        console.log('[Host] 비호스트 과일 추가:', id);
+        console.log('[Host] 비호스트 과일 추가:', id, 'x:', fruitState.x, 'y:', fruitState.y, 'size:', fruitState.size);
         this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
       }
       // 기존 과일 위치는 업데이트하지 않음 (호스트가 물리 시뮬레이션 권위자)
     }
+
+    // Firebase에서 삭제된 과일은 deletedFruitIds에서도 제거 (메모리 정리)
+    for (const id of this.deletedFruitIds) {
+      if (!this.remoteFruits[id]) {
+        this.deletedFruitIds.delete(id);
+      }
+    }
   }
 
   private syncFruitsFromRemote(): void {
+    // 비호스트: Firebase 상태를 그대로 반영 (물리 엔진은 렌더링용으로만 사용)
     const remoteIds = new Set(Object.keys(this.remoteFruits));
 
-    // 원격에 없는 로컬 과일 제거 (단, 방금 드롭한 과일은 보호)
+    // 원격에 없는 로컬 과일 제거
     for (const [id, body] of this.fruits) {
       if (!remoteIds.has(id)) {
-        // 내가 방금 드롭한 과일은 Firebase 동기화 완료까지 보호
-        if (id === this.droppedFruitId) {
-          continue;
-        }
         Matter.Composite.remove(this.engine.world, body);
         this.fruits.delete(id);
       }
@@ -252,11 +279,11 @@ export class MultiplayerGame {
     for (const [id, fruitState] of Object.entries(this.remoteFruits)) {
       const existingBody = this.fruits.get(id);
       if (existingBody) {
-        // 위치 업데이트 (부드럽게 보간)
+        // 위치 업데이트
         Matter.Body.setPosition(existingBody, { x: fruitState.x, y: fruitState.y });
         Matter.Body.setVelocity(existingBody, { x: 0, y: 0 });
       } else {
-        // 새 과일 생성
+        // 새 과일 생성 (렌더링용)
         this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
       }
     }
@@ -285,16 +312,29 @@ export class MultiplayerGame {
     console.log('[TurnStart] playerId:', _playerId, 'isMyTurn:', this.sync.isMyTurn, 'turnStartTime:', room.turnStartTime);
 
     this.stopTimer();
+    this.clearDropDelay();
     this.turnPhase = 'ready';
     this.currentFruitSize = fruitSize;
     this.dropX = fruitX;
-    this.droppedFruitId = null;
+    // droppedFruitId는 Firebase에 동기화될 때까지 유지 (syncFruitsFromRemote에서 정리)
     this.settleCheckTimer = 0;
+    this.dropEnabled = false;
 
-    // 내 턴이면 타이머 시작
+    // 내 턴이면 타이머 시작 + 1초 뒤 드롭 활성화
     if (this.sync.isMyTurn) {
       console.log('[TurnStart] 내 턴! 타이머 시작');
       this.startTimer();
+      this.dropDelayTimer = window.setTimeout(() => {
+        this.dropEnabled = true;
+        console.log('[TurnStart] 드롭 활성화');
+      }, DROP_DELAY_MS);
+    }
+  }
+
+  private clearDropDelay(): void {
+    if (this.dropDelayTimer !== null) {
+      clearTimeout(this.dropDelayTimer);
+      this.dropDelayTimer = null;
     }
   }
 
@@ -304,6 +344,32 @@ export class MultiplayerGame {
     this.audio.stopBGM();
     this.audio.playSFX('GAMEOVER');
     this.showGameOverScreen(partyScore);
+  }
+
+  // 호스트 전용: 비호스트의 드롭 요청을 받아 실제 drop 수행
+  private handleDropRequest(playerId: string, x: number, size: number): void {
+    if (!this.sync.isHost) return;
+
+    console.log('[DropRequest] 호스트가 드롭 요청 처리:', playerId, 'x:', x, 'size:', size);
+
+    // 드롭 프레임 기록
+    this.lastDropFrame = this.frameCount;
+
+    // 고유 ID 생성
+    const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    console.log('[DropRequest] 호스트가 과일 생성:', fruitId);
+
+    // 물리 엔진에 과일 생성
+    this.createFruitWithId(fruitId, x, DROP_Y, size);
+
+    // Firebase에 과일 동기화 (호스트가 직접 수행)
+    this.sync.dropFruit(fruitId, x, DROP_Y, size);
+
+    // 드롭 요청 삭제
+    this.sync.clearDropRequest();
+
+    // 드롭 사운드는 요청한 클라이언트가 이미 재생함
   }
 
   private startMoving(direction: 'left' | 'right'): void {
@@ -335,6 +401,8 @@ export class MultiplayerGame {
     this.timerInterval = window.setInterval(() => {
       this.timeRemaining--;
       if (this.timeRemaining <= 0) {
+        // 타임아웃 시 강제 드롭
+        this.dropEnabled = true;
         this.dropFruit();
       }
     }, 1000);
@@ -348,28 +416,43 @@ export class MultiplayerGame {
   }
 
   private dropFruit(): void {
-    console.log('[Drop] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase);
-    if (!this.sync.isMyTurn || this.turnPhase !== 'ready') return;
+    console.log('[Drop] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase, 'dropEnabled:', this.dropEnabled, 'isHost:', this.sync.isHost);
+    if (!this.sync.isMyTurn || this.turnPhase !== 'ready' || !this.dropEnabled) return;
 
     this.stopTimer();
+    this.clearDropDelay();
     this.turnPhase = 'dropping';
+    this.dropEnabled = false;
     this.audio.playSFX('DROP');
 
-    // 고유 ID 생성
-    const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    this.droppedFruitId = fruitId;
+    // 드롭 프레임 기록 (3초 후부터 게임오버 체크)
+    this.lastDropFrame = this.frameCount;
 
-    console.log('[Drop] 과일 생성:', fruitId, 'x:', this.dropX, 'size:', this.currentFruitSize);
+    if (this.sync.isHost) {
+      // 호스트: 직접 과일 생성 및 물리 시뮬레이션
+      const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      this.droppedFruitId = fruitId;
 
-    // 과일 생성
-    this.createFruitWithId(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
-    this.turnPhase = 'settling';
-    this.settleCheckTimer = 0;
+      console.log('[Drop] 호스트가 직접 과일 생성:', fruitId, 'x:', this.dropX, 'size:', this.currentFruitSize);
+
+      this.createFruitWithId(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
+      this.turnPhase = 'settling';
+      this.settleCheckTimer = 0;
+
+      // Firebase에 과일 동기화
+      this.sync.dropFruit(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
+    } else {
+      // 비호스트: 드롭 요청만 전송 (호스트가 실제 drop 수행)
+      console.log('[Drop] 비호스트가 드롭 요청 전송:', 'x:', this.dropX, 'size:', this.currentFruitSize);
+
+      this.turnPhase = 'settling';
+      this.settleCheckTimer = 0;
+
+      // 호스트에게 드롭 요청만 전송
+      this.sync.requestDrop(this.dropX, this.currentFruitSize);
+    }
 
     console.log('[Drop] settling 상태로 전환, 타이머 리셋');
-
-    // 서버에 드롭 알림
-    this.sync.dropFruit(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
   }
 
   private createFruitWithId(id: string, x: number, y: number, size: number): Matter.Body {
@@ -393,6 +476,10 @@ export class MultiplayerGame {
     if (fruit) {
       Matter.Composite.remove(this.engine.world, fruit);
       this.fruits.delete(id);
+      // 호스트: 삭제된 과일 ID 기록 (Firebase 동기화 지연으로 인한 재생성 방지)
+      if (this.sync.isHost) {
+        this.deletedFruitIds.add(id);
+      }
     }
   }
 
@@ -517,6 +604,14 @@ export class MultiplayerGame {
   // 게임오버 타이머 업데이트 (호스트만)
   private updateGameOverCheck(): void {
     if (!this.sync.isHost) return;
+
+    // 드롭 후 3초간은 게임오버 체크 안함
+    const framesSinceLastDrop = this.frameCount - this.lastDropFrame;
+    if (framesSinceLastDrop < DROP_GRACE_FRAMES) {
+      this.gameOverTimer = 0;
+      this.isOverLine = false;
+      return;
+    }
 
     const overLine = this.checkFruitsOverLine();
 
@@ -678,22 +773,18 @@ export class MultiplayerGame {
     }
   }
 
-  // 다음 과일 크기 결정 (중앙값 기준 확률 분포)
+  // 다음 과일 크기 결정 (작은 크기일수록 높은 확률)
   private getNextFruitSize(): number {
     // 스폰 가능 최대 크기: maxFruitSize - 1 (최소 1, 최대 5)
     const maxSpawn = Math.min(Math.max(1, this.maxFruitSize - 1), 5);
 
     if (maxSpawn === 1) return 1;
 
-    // 중앙값 계산: (maxSpawn + 1) / 2
-    const center = (maxSpawn + 1) / 2;
-
-    // 각 크기별 가중치 계산 (중앙에서 멀어질수록 낮아짐)
+    // 각 크기별 가중치 계산 (작을수록 높음)
+    // 크기 1: 가중치 maxSpawn, 크기 2: 가중치 maxSpawn-1, ...
     const weights: number[] = [];
     for (let size = 1; size <= maxSpawn; size++) {
-      const distance = Math.abs(size - center);
-      // 가중치: 중앙일수록 높음 (거리에 따라 지수적으로 감소)
-      const weight = Math.pow(0.6, distance);
+      const weight = maxSpawn - size + 1;
       weights.push(weight);
     }
 
@@ -716,6 +807,8 @@ export class MultiplayerGame {
     if (!this.sync.isHost) return;
 
     const fruitsData: Record<string, { x: number; y: number; size: number }> = {};
+
+    // 호스트의 로컬 과일 (물리 엔진 위치)
     for (const [id, body] of this.fruits) {
       const parsed = this.parseFruitLabel(body.label);
       if (parsed) {
@@ -726,7 +819,15 @@ export class MultiplayerGame {
         };
       }
     }
-    this.sync.syncAllFruits(fruitsData);
+
+    // 삭제된 과일 목록 (Firebase에서도 삭제)
+    const deletedIds = Array.from(this.deletedFruitIds);
+
+    // update()를 사용하므로 비호스트 과일은 자동으로 보존됨
+    this.sync.syncAllFruits(fruitsData, deletedIds);
+
+    // sync 후 deletedFruitIds 정리 (이미 Firebase에 반영됨)
+    this.deletedFruitIds.clear();
   }
 
   private showGameOverScreen(partyScore: number): void {
@@ -1195,8 +1296,8 @@ export class MultiplayerGame {
   }
 
   private renderRemoteFruits(ctx: CanvasRenderingContext2D): void {
-    // 원격 과일 렌더링
-    for (const fruitState of Object.values(this.remoteFruits)) {
+    // 비호스트: Firebase에서 받은 과일 상태만 렌더링 (호스트가 물리 시뮬레이션 전담)
+    for (const [, fruitState] of Object.entries(this.remoteFruits)) {
       const data = FRUIT_DATA[fruitState.size - 1] || FRUIT_DATA[0];
 
       ctx.beginPath();
@@ -1212,32 +1313,6 @@ export class MultiplayerGame {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(fruitState.size.toString(), fruitState.x, fruitState.y);
-    }
-
-    // 방금 드롭한 과일이 원격에 아직 없으면 로컬에서 렌더링
-    if (this.droppedFruitId && !this.remoteFruits[this.droppedFruitId]) {
-      const droppedFruit = this.fruits.get(this.droppedFruitId);
-      if (droppedFruit) {
-        const { x, y } = droppedFruit.position;
-        const parsed = this.parseFruitLabel(droppedFruit.label);
-        if (parsed) {
-          const data = FRUIT_DATA[parsed.size - 1] || FRUIT_DATA[0];
-
-          ctx.beginPath();
-          ctx.arc(x, y, data.radius, 0, Math.PI * 2);
-          ctx.fillStyle = data.color;
-          ctx.fill();
-          ctx.strokeStyle = '#ffffff44';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-
-          ctx.fillStyle = '#fff';
-          ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(parsed.size.toString(), x, y);
-        }
-      }
     }
   }
 

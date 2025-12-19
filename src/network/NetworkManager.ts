@@ -194,6 +194,28 @@ export class NetworkManager {
     await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
   }
 
+  // 비호스트용: 드롭 요청만 전송 (호스트가 실제 drop 수행)
+  async requestDrop(x: number, size: number): Promise<void> {
+    if (!this.currentRoomId) return;
+
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    await set(ref(database, `rooms/${this.currentRoomId}/dropRequest`), {
+      id: requestId,
+      playerId: this.playerId,
+      x,
+      size,
+      timestamp: Date.now(),
+    });
+
+    await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
+  }
+
+  // 호스트용: 드롭 요청 처리 완료 후 삭제
+  async clearDropRequest(): Promise<void> {
+    if (!this.currentRoomId) return;
+    await remove(ref(database, `rooms/${this.currentRoomId}/dropRequest`));
+  }
+
   async nextTurn(nextFruitSize: number): Promise<void> {
     if (!this.currentRoomId) return;
 
@@ -260,10 +282,15 @@ export class NetworkManager {
     });
   }
 
-  async syncAllFruits(fruits: Record<string, { x: number; y: number; size: number }>): Promise<void> {
+  async syncAllFruits(
+    fruits: Record<string, { x: number; y: number; size: number }>,
+    deletedIds: string[] = []
+  ): Promise<void> {
     if (!this.currentRoomId) return;
 
-    const fruitsUpdate: Record<string, { id: string; x: number; y: number; size: number; isDropped: boolean }> = {};
+    const fruitsUpdate: Record<string, { id: string; x: number; y: number; size: number; isDropped: boolean } | null> = {};
+
+    // 업데이트할 과일
     for (const [id, fruit] of Object.entries(fruits)) {
       fruitsUpdate[id] = {
         id,
@@ -274,7 +301,13 @@ export class NetworkManager {
       };
     }
 
-    await set(ref(database, `rooms/${this.currentRoomId}/fruits`), fruitsUpdate);
+    // 삭제할 과일 (null로 설정하면 Firebase에서 삭제됨)
+    for (const id of deletedIds) {
+      fruitsUpdate[id] = null;
+    }
+
+    // update()는 기존 데이터를 유지하면서 지정된 항목만 업데이트
+    await update(ref(database, `rooms/${this.currentRoomId}/fruits`), fruitsUpdate);
   }
 
   isHost(): boolean {
@@ -434,19 +467,28 @@ export class NetworkManager {
   }
 
   async getRoomList(): Promise<RoomState[]> {
-    const roomsRef = ref(database, 'rooms');
-    const snapshot = await get(roomsRef);
+    console.log('[NetworkManager] getRoomList 호출');
+    try {
+      const roomsRef = ref(database, 'rooms');
+      const snapshot = await get(roomsRef);
 
-    if (!snapshot.exists()) return [];
+      console.log('[NetworkManager] snapshot exists:', snapshot.exists());
 
-    const rooms: RoomState[] = [];
-    snapshot.forEach((child) => {
-      const room = child.val() as RoomState;
-      if (room.status === 'waiting') {
-        rooms.push(room);
-      }
-    });
+      if (!snapshot.exists()) return [];
 
-    return rooms;
+      const rooms: RoomState[] = [];
+      snapshot.forEach((child) => {
+        const room = child.val() as RoomState;
+        if (room.status === 'waiting') {
+          rooms.push(room);
+        }
+      });
+
+      console.log('[NetworkManager] 찾은 방 개수:', rooms.length);
+      return rooms;
+    } catch (error) {
+      console.error('[NetworkManager] getRoomList 에러:', error);
+      throw error;
+    }
   }
 }

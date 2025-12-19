@@ -12,7 +12,8 @@ export type GameSyncEvent =
   | { type: 'game_start' }
   | { type: 'game_over'; partyScore: number }
   | { type: 'player_join'; playerId: string; playerName: string }
-  | { type: 'player_leave'; playerId: string };
+  | { type: 'player_leave'; playerId: string }
+  | { type: 'drop_request'; playerId: string; x: number; size: number };
 
 type EventListener = (event: GameSyncEvent) => void;
 
@@ -22,6 +23,7 @@ export class GameSync {
   private currentRoom: RoomState | null = null;
   private lastRoomState: RoomState | null = null;
   private lastEmittedTurnStartTime = 0; // 중복 turn_start 방지
+  private lastProcessedDropRequestId: string | null = null; // 중복 drop_request 방지
 
   constructor(network: NetworkManager) {
     this.network = network;
@@ -155,6 +157,20 @@ export class GameSync {
         });
       }
     }
+
+    // 드롭 요청 감지 (호스트만 처리)
+    if (this.isHost && room.dropRequest) {
+      if (room.dropRequest.id !== this.lastProcessedDropRequestId) {
+        this.lastProcessedDropRequestId = room.dropRequest.id;
+        console.log('[GameSync] drop_request 감지:', room.dropRequest);
+        this.emit({
+          type: 'drop_request',
+          playerId: room.dropRequest.playerId,
+          x: room.dropRequest.x,
+          size: room.dropRequest.size,
+        });
+      }
+    }
   }
 
   on(listener: EventListener): void {
@@ -176,8 +192,31 @@ export class GameSync {
   }
 
   async dropFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
-    if (!this.isMyTurn) return;
+    console.log('[GameSync.dropFruit] 호출됨 - isMyTurn:', this.isMyTurn, 'fruitId:', fruitId);
+    if (!this.isMyTurn) {
+      console.log('[GameSync.dropFruit] isMyTurn이 false라서 리턴');
+      return;
+    }
+    console.log('[GameSync.dropFruit] Firebase에 전송 중...');
     await this.network.dropFruit(fruitId, x, y, size);
+    console.log('[GameSync.dropFruit] Firebase 전송 완료');
+  }
+
+  // 비호스트용: 드롭 요청만 전송
+  async requestDrop(x: number, size: number): Promise<void> {
+    console.log('[GameSync.requestDrop] 호출됨 - isMyTurn:', this.isMyTurn, 'x:', x, 'size:', size);
+    if (!this.isMyTurn) {
+      console.log('[GameSync.requestDrop] isMyTurn이 false라서 리턴');
+      return;
+    }
+    console.log('[GameSync.requestDrop] Firebase에 요청 전송 중...');
+    await this.network.requestDrop(x, size);
+    console.log('[GameSync.requestDrop] Firebase 요청 전송 완료');
+  }
+
+  // 호스트용: 드롭 요청 처리 완료 후 삭제
+  async clearDropRequest(): Promise<void> {
+    await this.network.clearDropRequest();
   }
 
   async reportMerge(
@@ -209,8 +248,11 @@ export class GameSync {
     await this.network.endGame();
   }
 
-  async syncAllFruits(fruits: Record<string, { x: number; y: number; size: number }>): Promise<void> {
-    await this.network.syncAllFruits(fruits);
+  async syncAllFruits(
+    fruits: Record<string, { x: number; y: number; size: number }>,
+    deletedIds: string[] = []
+  ): Promise<void> {
+    await this.network.syncAllFruits(fruits, deletedIds);
   }
 
   async cleanupDisconnectedPlayers(): Promise<void> {
