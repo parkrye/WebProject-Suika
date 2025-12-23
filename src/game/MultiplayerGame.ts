@@ -886,6 +886,12 @@ export class MultiplayerGame {
         const midY = (bodyA.position.y + bodyB.position.y) / 2;
         const newSize = fruitA.size + 1;
 
+        // 두 오브젝트의 속도 벡터 합산 (제거 전에 저장)
+        const combinedVelocity = {
+          x: (bodyA.velocity.x + bodyB.velocity.x) * 0.5,
+          y: (bodyA.velocity.y + bodyB.velocity.y) * 0.5 + MERGE_BOUNCE_VELOCITY,
+        };
+
         // 기존 과일 제거
         this.removeFruitById(fruitA.id);
         this.removeFruitById(fruitB.id);
@@ -918,9 +924,9 @@ export class MultiplayerGame {
             this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
           }
         } else {
-          // 새 과일 생성 (위로 튀어오르는 효과)
+          // 새 과일 생성 (두 오브젝트의 속도 벡터 합산 방향으로 튕김)
           const newFruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-          this.createFruitWithId(newFruitId, midX, midY, newSize, { x: 0, y: MERGE_BOUNCE_VELOCITY });
+          this.createFruitWithId(newFruitId, midX, midY, newSize, combinedVelocity);
 
           // 점수 추가 - 마지막 드롭한 플레이어에게
           const scoreGain = FRUIT_DATA[newSize - 1]?.score || 0;
