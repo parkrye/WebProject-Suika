@@ -3,7 +3,9 @@ import type { FruitData } from './types';
 export const GAME_CONFIG = {
   TURN_TIME: 10,
   GAME_OVER_LINE_Y: 100,
-  DROP_AREA_Y: 80,
+  LAUNCH_AREA_Y: 540,        // 발사 위치 (바닥에서 60px 위)
+  LAUNCH_VELOCITY_Y: -18,    // 발사 초기 속도 (위쪽)
+  DROP_AREA_Y: 80,           // 레거시 호환용 (싱글플레이어)
   WALL_THICKNESS: 20,
   GRAVITY: 1,
 } as const;

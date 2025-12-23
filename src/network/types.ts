@@ -19,6 +19,8 @@ export interface DropRequest {
   playerId: string;
   x: number;
   size: number;
+  velocityX: number;
+  velocityY: number;
   timestamp: number;
 }
 

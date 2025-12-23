@@ -203,7 +203,54 @@ export class NetworkManager {
       playerId: this.playerId,
       x,
       size,
+      velocityX: 0,
+      velocityY: 0,
       timestamp: Date.now(),
+    });
+
+    await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
+  }
+
+  // 비호스트용: 속도 포함 드롭 요청 전송 (슬링샷)
+  async requestDropWithVelocity(
+    x: number,
+    size: number,
+    velocity: { x: number; y: number }
+  ): Promise<void> {
+    if (!this.currentRoomId) return;
+
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    await set(ref(database, `rooms/${this.currentRoomId}/dropRequest`), {
+      id: requestId,
+      playerId: this.playerId,
+      x,
+      size,
+      velocityX: velocity.x,
+      velocityY: velocity.y,
+      timestamp: Date.now(),
+    });
+
+    await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
+  }
+
+  // 호스트용: 속도 포함 과일 드롭 (슬링샷)
+  async dropFruitWithVelocity(
+    fruitId: string,
+    x: number,
+    y: number,
+    size: number,
+    velocity: { x: number; y: number }
+  ): Promise<void> {
+    if (!this.currentRoomId) return;
+
+    await update(ref(database, `rooms/${this.currentRoomId}/fruits/${fruitId}`), {
+      id: fruitId,
+      x,
+      y,
+      size,
+      velocityX: velocity.x,
+      velocityY: velocity.y,
+      isDropped: true,
     });
 
     await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);

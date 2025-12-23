@@ -13,7 +13,7 @@ export type GameSyncEvent =
   | { type: 'game_over'; partyScore: number }
   | { type: 'player_join'; playerId: string; playerName: string }
   | { type: 'player_leave'; playerId: string }
-  | { type: 'drop_request'; playerId: string; x: number; size: number };
+  | { type: 'drop_request'; playerId: string; x: number; size: number; velocityX: number; velocityY: number };
 
 type EventListener = (event: GameSyncEvent) => void;
 
@@ -168,6 +168,8 @@ export class GameSync {
           playerId: room.dropRequest.playerId,
           x: room.dropRequest.x,
           size: room.dropRequest.size,
+          velocityX: room.dropRequest.velocityX,
+          velocityY: room.dropRequest.velocityY,
         });
       }
     }
@@ -212,6 +214,50 @@ export class GameSync {
     console.log('[GameSync.requestDrop] Firebase에 요청 전송 중...');
     await this.network.requestDrop(x, size);
     console.log('[GameSync.requestDrop] Firebase 요청 전송 완료');
+  }
+
+  // 비호스트용: 속도 포함 드롭 요청 전송 (슬링샷)
+  async requestDropWithVelocity(
+    x: number,
+    size: number,
+    velocity: { x: number; y: number }
+  ): Promise<void> {
+    console.log('[GameSync.requestDropWithVelocity] 호출됨 - isMyTurn:', this.isMyTurn);
+    if (!this.isMyTurn) {
+      console.log('[GameSync.requestDropWithVelocity] isMyTurn이 false라서 리턴');
+      return;
+    }
+    await this.network.requestDropWithVelocity(x, size, velocity);
+    console.log('[GameSync.requestDropWithVelocity] Firebase 요청 전송 완료');
+  }
+
+  // 호스트용: 속도 포함 과일 드롭 (슬링샷)
+  async dropFruitWithVelocity(
+    fruitId: string,
+    x: number,
+    y: number,
+    size: number,
+    velocity: { x: number; y: number }
+  ): Promise<void> {
+    console.log('[GameSync.dropFruitWithVelocity] 호출됨 - isMyTurn:', this.isMyTurn);
+    if (!this.isMyTurn) {
+      console.log('[GameSync.dropFruitWithVelocity] isMyTurn이 false라서 리턴');
+      return;
+    }
+    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity);
+    console.log('[GameSync.dropFruitWithVelocity] Firebase 전송 완료');
+  }
+
+  // 호스트용: 비호스트의 속도 포함 드롭 요청 처리
+  async hostAddFruitWithVelocity(
+    fruitId: string,
+    x: number,
+    y: number,
+    size: number,
+    velocity: { x: number; y: number }
+  ): Promise<void> {
+    if (!this.isHost) return;
+    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity);
   }
 
   // 호스트용: 드롭 요청 처리 완료 후 삭제

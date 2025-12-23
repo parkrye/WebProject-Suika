@@ -6,15 +6,26 @@ import { AudioManager } from '../core/AudioManager';
 
 const WIDTH = 400;
 const HEIGHT = 600;
-const DROP_Y = 80;
+const LAUNCH_Y = 540;         // 발사 위치 (바닥에서 60px 위)
 const GAME_OVER_Y = 100;
 const TURN_TIME = 10;
 const SYNC_INTERVAL = 5; // 호스트가 몇 프레임마다 동기화할지
 const GAME_OVER_CHECK_FRAMES = 120; // 게임오버 판정까지 2초 (60fps * 2)
 const DROP_GRACE_FRAMES = 180; // 드롭 후 3초 동안은 게임오버 체크 안함
-const DROP_DELAY_MS = 1000; // 턴 시작 후 드롭 버튼 활성화까지 1초
+const DROP_DELAY_MS = 1000; // 턴 시작 후 발사 활성화까지 1초
+
+// 슬링샷 관련 상수
+const SLINGSHOT_ZONE_TOP = 450;    // 터치 영역 시작 Y좌표
+const MIN_PULL_DISTANCE = 20;      // 최소 당김 거리 (px)
+const MAX_PULL_DISTANCE = 150;     // 최대 당김 거리 (px)
+const MIN_LAUNCH_SPEED = 8;        // 최소 발사 속도
+const MAX_LAUNCH_SPEED = 25;       // 최대 발사 속도
+
+// 합성 시 튀어오르는 속도
+const MERGE_BOUNCE_VELOCITY = -8;  // 위로 튀어오름 (음수 = 위쪽)
 
 type TurnPhase = 'waiting' | 'ready' | 'dropping' | 'settling';
+type SlingshotPhase = 'idle' | 'positioning' | 'pulling';
 
 // 폭죽 파티클 인터페이스
 interface Particle {
@@ -59,9 +70,14 @@ export class MultiplayerGame {
   private dropEnabled = false;
   private dropDelayTimer: number | null = null;
 
-  // 이동
-  private moveInterval: number | null = null;
-  private readonly MOVE_SPEED = 3;
+  // 슬링샷 상태
+  private slingshotPhase: SlingshotPhase = 'idle';
+  private slingshotStartX = 0;
+  private slingshotStartY = 0;
+  private slingshotCurrentX = 0;
+  private slingshotCurrentY = 0;
+  private launchVelocity: { x: number; y: number } = { x: 0, y: 0 };
+  private originalDropX = 0; // 터치 전 원래 X 좌표 (취소 시 복원용)
 
   // 충돌 처리
   private mergedPairs = new Set<string>();
@@ -100,11 +116,13 @@ export class MultiplayerGame {
     this.engine = Matter.Engine.create();
     this.engine.world.gravity.y = 1;
 
-    // 벽 생성
+    // 벽 생성 (바닥, 좌우 벽, 천장)
     const walls = [
       Matter.Bodies.rectangle(WIDTH / 2, HEIGHT + 10, WIDTH + 40, 20, { isStatic: true, label: 'floor' }),
       Matter.Bodies.rectangle(-10, HEIGHT / 2, 20, HEIGHT * 2, { isStatic: true, label: 'wall' }),
       Matter.Bodies.rectangle(WIDTH + 10, HEIGHT / 2, 20, HEIGHT * 2, { isStatic: true, label: 'wall' }),
+      // 천장 (폭죽이 화면 밖으로 나가지 않도록)
+      Matter.Bodies.rectangle(WIDTH / 2, -10, WIDTH + 40, 20, { isStatic: true, label: 'ceiling' }),
     ];
     Matter.Composite.add(this.engine.world, walls);
 
@@ -140,24 +158,304 @@ export class MultiplayerGame {
   }
 
   private setupInput(): void {
-    const btnLeft = document.getElementById('btn-left');
-    const btnRight = document.getElementById('btn-right');
-    const btnDrop = document.getElementById('btn-drop');
+    const canvas = this.ctx.canvas;
 
-    if (btnLeft) {
-      btnLeft.addEventListener('pointerdown', (e) => { e.preventDefault(); this.startMoving('left'); });
-      btnLeft.addEventListener('pointerup', () => this.stopMoving());
-      btnLeft.addEventListener('pointerleave', () => this.stopMoving());
+    // 캔버스에 포인터 이벤트 바인딩
+    canvas.addEventListener('pointerdown', this.handlePointerDown.bind(this));
+    canvas.addEventListener('pointermove', this.handlePointerMove.bind(this));
+    canvas.addEventListener('pointerup', this.handlePointerUp.bind(this));
+    canvas.addEventListener('pointerleave', this.handlePointerUp.bind(this));
+    canvas.addEventListener('pointercancel', this.handlePointerUp.bind(this));
+
+    // 컨텍스트 메뉴 방지
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // 터치 디바이스에서 스크롤 방지
+    canvas.style.touchAction = 'none';
+  }
+
+  private getCanvasPosition(e: PointerEvent): { x: number; y: number } {
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (WIDTH / rect.width),
+      y: (e.clientY - rect.top) * (HEIGHT / rect.height),
+    };
+  }
+
+  private handlePointerDown(e: PointerEvent): void {
+    // 내 턴이 아니거나 ready 상태가 아니거나 발사 비활성화면 무시
+    if (!this.sync.isMyTurn || this.turnPhase !== 'ready' || !this.dropEnabled) return;
+
+    const { x, y } = this.getCanvasPosition(e);
+
+    // 터치 영역(하단) 체크
+    if (y >= SLINGSHOT_ZONE_TOP && y <= HEIGHT) {
+      // 터치 전 원래 위치 저장 (취소 시 복원용)
+      this.originalDropX = this.dropX;
+
+      this.slingshotPhase = 'positioning';
+      this.slingshotStartX = x;
+      this.slingshotStartY = y;
+      this.slingshotCurrentX = x;
+      this.slingshotCurrentY = y;
+
+      // 폭죽을 터치 X 위치로 이동
+      const radius = FRUIT_DATA[this.currentFruitSize - 1].radius;
+      this.dropX = Math.max(radius + 4, Math.min(WIDTH - radius - 4, x));
+
+      // 포인터 캡처
+      this.ctx.canvas.setPointerCapture(e.pointerId);
+    }
+  }
+
+  private handlePointerMove(e: PointerEvent): void {
+    if (this.slingshotPhase === 'idle') return;
+
+    const { x, y } = this.getCanvasPosition(e);
+    this.slingshotCurrentX = x;
+    this.slingshotCurrentY = y;
+
+    if (this.slingshotPhase === 'positioning') {
+      // 아직 터치 영역 내 - 수평 이동만
+      if (y >= SLINGSHOT_ZONE_TOP && y <= HEIGHT) {
+        const radius = FRUIT_DATA[this.currentFruitSize - 1].radius;
+        this.dropX = Math.max(radius + 4, Math.min(WIDTH - radius - 4, x));
+        // 시작 위치도 업데이트 (스와이프)
+        this.slingshotStartX = x;
+        this.slingshotStartY = y;
+      } else if (y > HEIGHT) {
+        // 아래로 당김 시작
+        this.slingshotPhase = 'pulling';
+        this.calculateLaunchVelocity();
+      }
+    } else if (this.slingshotPhase === 'pulling') {
+      // 당기는 중 - 속도 계산
+      this.calculateLaunchVelocity();
+    }
+  }
+
+  private handlePointerUp(e: PointerEvent): void {
+    if (this.slingshotPhase === 'idle') return;
+
+    let launched = false;
+
+    if (this.slingshotPhase === 'pulling') {
+      // 발사 속도 계산
+      this.calculateLaunchVelocity();
+      const pullDistance = Math.sqrt(
+        Math.pow(this.slingshotCurrentX - this.slingshotStartX, 2) +
+        Math.pow(this.slingshotCurrentY - this.slingshotStartY, 2)
+      );
+
+      // 최소 당김 거리 이상이면 발사
+      if (pullDistance >= MIN_PULL_DISTANCE) {
+        this.launchFruit();
+        launched = true;
+      }
     }
 
-    if (btnRight) {
-      btnRight.addEventListener('pointerdown', (e) => { e.preventDefault(); this.startMoving('right'); });
-      btnRight.addEventListener('pointerup', () => this.stopMoving());
-      btnRight.addEventListener('pointerleave', () => this.stopMoving());
+    // 발사하지 않았으면 원래 위치로 복원
+    if (!launched) {
+      this.dropX = this.originalDropX;
     }
 
-    if (btnDrop) {
-      btnDrop.addEventListener('click', () => this.dropFruit());
+    // 상태 초기화
+    this.slingshotPhase = 'idle';
+    this.launchVelocity = { x: 0, y: 0 };
+
+    try {
+      this.ctx.canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      // 이미 릴리즈됨
+    }
+  }
+
+  private calculateLaunchVelocity(): void {
+    // 당긴 벡터: 현재 → 시작 (당긴 반대 방향으로 발사)
+    const dx = this.slingshotStartX - this.slingshotCurrentX;
+    const dy = this.slingshotStartY - this.slingshotCurrentY;
+
+    const pullDistance = Math.sqrt(dx * dx + dy * dy);
+
+    if (pullDistance < MIN_PULL_DISTANCE) {
+      this.launchVelocity = { x: 0, y: 0 };
+      return;
+    }
+
+    // 당김 거리 클램프
+    const clampedPull = Math.min(pullDistance, MAX_PULL_DISTANCE);
+
+    // 속도 선형 보간
+    const t = (clampedPull - MIN_PULL_DISTANCE) / (MAX_PULL_DISTANCE - MIN_PULL_DISTANCE);
+    const speed = MIN_LAUNCH_SPEED + t * (MAX_LAUNCH_SPEED - MIN_LAUNCH_SPEED);
+
+    // 방향 정규화 및 속도 적용
+    const nx = dx / pullDistance;
+    const ny = dy / pullDistance;
+
+    this.launchVelocity = {
+      x: nx * speed,
+      y: ny * speed,
+    };
+  }
+
+  private renderSlingshotUI(ctx: CanvasRenderingContext2D): void {
+    const data = FRUIT_DATA[this.currentFruitSize - 1];
+
+    // 터치 영역 힌트 (하단 영역)
+    if (this.slingshotPhase === 'idle' && this.dropEnabled) {
+      const gradient = ctx.createLinearGradient(0, SLINGSHOT_ZONE_TOP, 0, HEIGHT);
+      gradient.addColorStop(0, 'rgba(255, 107, 157, 0)');
+      gradient.addColorStop(0.5, 'rgba(255, 107, 157, 0.05)');
+      gradient.addColorStop(1, 'rgba(255, 107, 157, 0.1)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, SLINGSHOT_ZONE_TOP, WIDTH, HEIGHT - SLINGSHOT_ZONE_TOP);
+
+      // 터치 힌트 텍스트
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Touch & Pull Down to Launch', WIDTH / 2, (SLINGSHOT_ZONE_TOP + HEIGHT) / 2);
+    }
+
+    if (this.slingshotPhase === 'pulling') {
+      // 당기는 중 - 고무줄 효과와 궤적 표시
+      const pullDx = this.slingshotCurrentX - this.slingshotStartX;
+      const pullDy = this.slingshotCurrentY - this.slingshotStartY;
+      const pullDistance = Math.sqrt(pullDx * pullDx + pullDy * pullDy);
+      const clampedPull = Math.min(pullDistance, MAX_PULL_DISTANCE);
+      const stretchFactor = pullDistance > 0 ? clampedPull / pullDistance : 0;
+
+      // 당겨진 폭죽 위치
+      const fruitX = this.dropX + pullDx * stretchFactor * 0.5;
+      const fruitY = LAUNCH_Y + pullDy * stretchFactor * 0.5;
+
+      // 고무줄 (앵커에서 폭죽으로)
+      const anchorLeft = this.dropX - 25;
+      const anchorRight = this.dropX + 25;
+
+      ctx.strokeStyle = '#ff6b9d';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(anchorLeft, LAUNCH_Y);
+      ctx.lineTo(fruitX, fruitY);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(anchorRight, LAUNCH_Y);
+      ctx.lineTo(fruitX, fruitY);
+      ctx.stroke();
+
+      // 앵커 포인트
+      ctx.fillStyle = '#ff6b9d';
+      ctx.beginPath();
+      ctx.arc(anchorLeft, LAUNCH_Y, 5, 0, Math.PI * 2);
+      ctx.arc(anchorRight, LAUNCH_Y, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 당겨진 폭죽
+      ctx.beginPath();
+      ctx.arc(fruitX, fruitY, data.radius, 0, Math.PI * 2);
+      ctx.fillStyle = data.color;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff66';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.currentFruitSize.toString(), fruitX, fruitY);
+
+      // 궤적 예측선 (당긴 반대 방향)
+      if (this.launchVelocity.x !== 0 || this.launchVelocity.y !== 0) {
+        this.renderTrajectory(ctx);
+      }
+    } else {
+      // 대기 중 또는 위치 조정 중 - 폭죽 프리뷰
+      ctx.beginPath();
+      ctx.arc(this.dropX, LAUNCH_Y, data.radius, 0, Math.PI * 2);
+      ctx.fillStyle = data.color;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff44';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(this.currentFruitSize.toString(), this.dropX, LAUNCH_Y);
+
+      // 위치 조정 중이면 X 표시
+      if (this.slingshotPhase === 'positioning') {
+        ctx.strokeStyle = '#ffffff88';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(this.dropX, LAUNCH_Y - data.radius - 5);
+        ctx.lineTo(this.dropX, 0);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  private renderTrajectory(ctx: CanvasRenderingContext2D): void {
+    const gravity = 1; // Matter.js 중력과 동일
+    const steps = 40;  // 궤적 점 개수
+
+    let px = this.dropX;
+    let py = LAUNCH_Y;
+    let vx = this.launchVelocity.x;
+    let vy = this.launchVelocity.y;
+
+    ctx.strokeStyle = '#ffffff88';
+    ctx.setLineDash([8, 8]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+
+    for (let i = 0; i < steps; i++) {
+      // 물리 시뮬레이션 (간단한 버전)
+      vx *= 0.99; // 공기 저항
+      vy += gravity;
+      vy *= 0.99;
+
+      px += vx;
+      py += vy;
+
+      // 화면 밖이면 중지
+      if (px < 0 || px > WIDTH || py < 0 || py > HEIGHT) break;
+
+      ctx.lineTo(px, py);
+    }
+
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 화살표 끝
+    if (px >= 0 && px <= WIDTH && py >= 0 && py <= HEIGHT) {
+      const angle = Math.atan2(vy, vx);
+      const arrowSize = 8;
+
+      ctx.fillStyle = '#ffffff88';
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(
+        px - arrowSize * Math.cos(angle - Math.PI / 6),
+        py - arrowSize * Math.sin(angle - Math.PI / 6)
+      );
+      ctx.lineTo(
+        px - arrowSize * Math.cos(angle + Math.PI / 6),
+        py - arrowSize * Math.sin(angle + Math.PI / 6)
+      );
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -177,7 +475,7 @@ export class MultiplayerGame {
           this.handleGameOver(event.partyScore);
           break;
         case 'drop_request':
-          this.handleDropRequest(event.playerId, event.x, event.size);
+          this.handleDropRequest(event.playerId, event.x, event.size, event.velocityX, event.velocityY);
           break;
       }
     });
@@ -379,11 +677,17 @@ export class MultiplayerGame {
     this.showGameOverScreen(partyScore);
   }
 
-  // 호스트 전용: 비호스트의 드롭 요청을 받아 실제 drop 수행
-  private handleDropRequest(playerId: string, x: number, size: number): void {
+  // 호스트 전용: 비호스트의 드롭 요청을 받아 실제 발사 수행
+  private handleDropRequest(
+    playerId: string,
+    x: number,
+    size: number,
+    velocityX: number,
+    velocityY: number
+  ): void {
     if (!this.sync.isHost) return;
 
-    console.log('[DropRequest] 호스트가 드롭 요청 처리:', playerId, 'x:', x, 'size:', size);
+    console.log('[DropRequest] 호스트가 발사 요청 처리:', playerId, 'x:', x, 'size:', size, 'velocity:', velocityX, velocityY);
 
     // 드롭 프레임 기록
     this.lastDropFrame = this.frameCount;
@@ -392,41 +696,24 @@ export class MultiplayerGame {
     // 고유 ID 생성
     const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    console.log('[DropRequest] 호스트가 과일 생성:', fruitId);
+    console.log('[DropRequest] 호스트가 과일 발사:', fruitId);
 
-    // 물리 엔진에 과일 생성
-    this.createFruitWithId(fruitId, x, DROP_Y, size);
+    // 물리 엔진에 과일 생성 (발사 위치와 전달받은 속도)
+    this.createFruitWithId(
+      fruitId,
+      x,
+      LAUNCH_Y,
+      size,
+      { x: velocityX, y: velocityY }
+    );
 
     // Firebase에 과일 동기화 (호스트 권한으로 직접 수행, isMyTurn 체크 없음)
-    this.sync.hostAddFruit(fruitId, x, DROP_Y, size);
+    this.sync.hostAddFruit(fruitId, x, LAUNCH_Y, size);
 
     // 드롭 요청 삭제
     this.sync.clearDropRequest();
 
     // 드롭 사운드는 요청한 클라이언트가 이미 재생함
-  }
-
-  private startMoving(direction: 'left' | 'right'): void {
-    if (!this.sync.isMyTurn || this.turnPhase !== 'ready' || this.moveInterval) return;
-    this.moveOnce(direction);
-    this.moveInterval = window.setInterval(() => this.moveOnce(direction), 16);
-  }
-
-  private stopMoving(): void {
-    if (this.moveInterval) {
-      clearInterval(this.moveInterval);
-      this.moveInterval = null;
-    }
-  }
-
-  private moveOnce(direction: 'left' | 'right'): void {
-    if (!this.sync.isMyTurn || this.turnPhase !== 'ready') return;
-    const radius = FRUIT_DATA[this.currentFruitSize - 1].radius;
-    if (direction === 'left') {
-      this.dropX = Math.max(radius + 4, this.dropX - this.MOVE_SPEED);
-    } else {
-      this.dropX = Math.min(WIDTH - radius - 4, this.dropX + this.MOVE_SPEED);
-    }
   }
 
   private startTimer(): void {
@@ -435,9 +722,9 @@ export class MultiplayerGame {
     this.timerInterval = window.setInterval(() => {
       this.timeRemaining--;
       if (this.timeRemaining <= 0) {
-        // 타임아웃 시 강제 드롭
+        // 타임아웃 시 강제 발사 (기본 속도)
         this.dropEnabled = true;
-        this.dropFruit();
+        this.launchFruit();
       }
     }, 1000);
   }
@@ -449,8 +736,8 @@ export class MultiplayerGame {
     }
   }
 
-  private dropFruit(): void {
-    console.log('[Drop] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase, 'dropEnabled:', this.dropEnabled, 'isHost:', this.sync.isHost);
+  private launchFruit(): void {
+    console.log('[Launch] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase, 'dropEnabled:', this.dropEnabled, 'isHost:', this.sync.isHost);
     if (!this.sync.isMyTurn || this.turnPhase !== 'ready' || !this.dropEnabled) return;
 
     this.stopTimer();
@@ -462,41 +749,69 @@ export class MultiplayerGame {
     // 드롭 프레임 기록 (3초 후부터 게임오버 체크)
     this.lastDropFrame = this.frameCount;
 
+    // 동적 발사 속도 사용 (당기지 않았으면 기본 속도)
+    const velocity = (this.launchVelocity.x !== 0 || this.launchVelocity.y !== 0)
+      ? this.launchVelocity
+      : { x: 0, y: -MIN_LAUNCH_SPEED };
+
     if (this.sync.isHost) {
       // 호스트: 직접 과일 생성 및 물리 시뮬레이션
       const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       this.droppedFruitId = fruitId;
       this.lastDropPlayerId = this.sync.playerId; // 합성 점수용
 
-      console.log('[Drop] 호스트가 직접 과일 생성:', fruitId, 'x:', this.dropX, 'size:', this.currentFruitSize);
+      console.log('[Launch] 호스트가 직접 과일 발사:', fruitId, 'x:', this.dropX, 'velocity:', velocity);
 
-      this.createFruitWithId(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
+      // 발사 위치와 동적 속도로 생성
+      this.createFruitWithId(
+        fruitId,
+        this.dropX,
+        LAUNCH_Y,
+        this.currentFruitSize,
+        velocity
+      );
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
 
-      // Firebase에 과일 동기화
-      this.sync.dropFruit(fruitId, this.dropX, DROP_Y, this.currentFruitSize);
+      // Firebase에 과일 동기화 (velocity 포함)
+      this.sync.dropFruitWithVelocity(fruitId, this.dropX, LAUNCH_Y, this.currentFruitSize, velocity);
     } else {
       // 비호스트: 드롭 요청 전송 + 로컬 예측 렌더링용 임시 과일 생성
-      console.log('[Drop] 비호스트가 드롭 요청 전송:', 'x:', this.dropX, 'size:', this.currentFruitSize);
+      console.log('[Launch] 비호스트가 발사 요청 전송:', 'x:', this.dropX, 'velocity:', velocity);
 
-      // 로컬 예측 렌더링용 임시 과일 생성 (부드러운 낙하 표시)
+      // 로컬 예측 렌더링용 임시 과일 생성 (발사 애니메이션)
       const tempFruitId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       this.pendingDropFruitId = tempFruitId;
       this.pendingDropSynced = false;
-      this.createFruitWithId(tempFruitId, this.dropX, DROP_Y, this.currentFruitSize);
+      this.createFruitWithId(
+        tempFruitId,
+        this.dropX,
+        LAUNCH_Y,
+        this.currentFruitSize,
+        velocity
+      );
 
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
 
-      // 호스트에게 드롭 요청만 전송
-      this.sync.requestDrop(this.dropX, this.currentFruitSize);
+      // 호스트에게 드롭 요청 전송 (velocity 포함)
+      this.sync.requestDropWithVelocity(this.dropX, this.currentFruitSize, velocity);
     }
 
-    console.log('[Drop] settling 상태로 전환, 타이머 리셋');
+    // 슬링샷 상태 초기화
+    this.slingshotPhase = 'idle';
+    this.launchVelocity = { x: 0, y: 0 };
+
+    console.log('[Launch] settling 상태로 전환, 타이머 리셋');
   }
 
-  private createFruitWithId(id: string, x: number, y: number, size: number): Matter.Body {
+  private createFruitWithId(
+    id: string,
+    x: number,
+    y: number,
+    size: number,
+    initialVelocity?: { x: number; y: number }
+  ): Matter.Body {
     const data = FRUIT_DATA[size - 1] || FRUIT_DATA[0];
 
     const fruit = Matter.Bodies.circle(x, y, data.radius, {
@@ -509,6 +824,12 @@ export class MultiplayerGame {
 
     Matter.Composite.add(this.engine.world, fruit);
     this.fruits.set(id, fruit);
+
+    // 초기 속도 설정 (발사용)
+    if (initialVelocity) {
+      Matter.Body.setVelocity(fruit, initialVelocity);
+    }
+
     return fruit;
   }
 
@@ -592,9 +913,9 @@ export class MultiplayerGame {
             this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
           }
         } else {
-          // 새 과일 생성
+          // 새 과일 생성 (위로 튀어오르는 효과)
           const newFruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-          this.createFruitWithId(newFruitId, midX, midY, newSize);
+          this.createFruitWithId(newFruitId, midX, midY, newSize, { x: 0, y: MERGE_BOUNCE_VELOCITY });
 
           // 점수 추가 - 마지막 드롭한 플레이어에게
           const scoreGain = FRUIT_DATA[newSize - 1]?.score || 0;
@@ -1276,31 +1597,9 @@ export class MultiplayerGame {
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
 
-    // 드롭 가이드라인 (ready 상태일 때)
-    if (this.turnPhase === 'ready') {
-      ctx.strokeStyle = '#ffffff44';
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(this.dropX, DROP_Y);
-      ctx.lineTo(this.dropX, HEIGHT);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 프리뷰 과일
-      const data = FRUIT_DATA[this.currentFruitSize - 1];
-      ctx.beginPath();
-      ctx.arc(this.dropX, DROP_Y, data.radius, 0, Math.PI * 2);
-      ctx.fillStyle = data.color;
-      ctx.fill();
-      ctx.strokeStyle = '#ffffff44';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.fillStyle = '#fff';
-      ctx.font = `bold ${Math.max(12, data.radius * 0.5)}px Arial`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(this.currentFruitSize.toString(), this.dropX, DROP_Y);
+    // 슬링샷 시각화 (ready 상태일 때)
+    if (this.turnPhase === 'ready' && this.sync.isMyTurn) {
+      this.renderSlingshotUI(ctx);
     }
 
     // 파티클 그리기 (폭죽 효과)
@@ -1486,7 +1785,6 @@ export class MultiplayerGame {
   stop(): void {
     this.isRunning = false;
     this.stopTimer();
-    this.stopMoving();
     this.audio.stopBGM();
   }
 }
