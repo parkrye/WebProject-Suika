@@ -6,8 +6,8 @@ import { AudioManager } from '../core/AudioManager';
 
 const WIDTH = 400;
 const HEIGHT = 600;
-const LAUNCH_Y = 540;         // 발사 위치 (바닥에서 60px 위)
-const GAME_OVER_Y = 100;
+const LAUNCH_Y = 540;         // 발사 위치 (하단)
+const GAME_OVER_Y = 500;      // 게임오버 라인 (하단, 오브젝트가 여기까지 내려오면 위험)
 const TURN_TIME = 10;
 const SYNC_INTERVAL = 5; // 호스트가 몇 프레임마다 동기화할지
 const GAME_OVER_CHECK_FRAMES = 120; // 게임오버 판정까지 2초 (60fps * 2)
@@ -21,8 +21,8 @@ const MAX_PULL_DISTANCE = 150;     // 최대 당김 거리 (px)
 const MIN_LAUNCH_SPEED = 8;        // 최소 발사 속도
 const MAX_LAUNCH_SPEED = 25;       // 최대 발사 속도
 
-// 합성 시 튀어오르는 속도
-const MERGE_BOUNCE_VELOCITY = -8;  // 위로 튀어오름 (음수 = 위쪽)
+// 합성 시 튀는 속도 (천장에서 아래로 튕김)
+const MERGE_BOUNCE_VELOCITY = 8;   // 아래로 튕김 (양수 = 아래쪽)
 
 // 크기 10 폭발 충격파
 const EXPLOSION_RADIUS = 200;      // 충격파 영향 범위 (px)
@@ -118,7 +118,7 @@ export class MultiplayerGame {
 
     // Matter.js 엔진 생성 (호스트만 실제로 물리 계산)
     this.engine = Matter.Engine.create();
-    this.engine.world.gravity.y = 1;
+    this.engine.world.gravity.y = -1; // 중력이 위쪽으로 (오브젝트가 천장에 쌓임)
 
     // 벽 생성 (바닥, 좌우 벽, 천장)
     const walls = [
@@ -957,9 +957,9 @@ export class MultiplayerGame {
       const parsed = this.parseFruitLabel(fruit.label);
       if (!parsed) continue;
       const radius = FRUIT_DATA[parsed.size - 1]?.radius || 15;
-      // 과일의 상단이 게임오버 라인 위에 있고, 속도가 거의 없을 때만
+      // 과일의 하단이 게임오버 라인 아래에 있고, 속도가 거의 없을 때만
       const speed = Math.sqrt(fruit.velocity.x ** 2 + fruit.velocity.y ** 2);
-      if (fruit.position.y - radius < GAME_OVER_Y && speed < 2) {
+      if (fruit.position.y + radius > GAME_OVER_Y && speed < 2) {
         return true;
       }
     }
@@ -993,7 +993,7 @@ export class MultiplayerGame {
         this.sync.reportGameOver();
       }
     } else {
-      // 선 아래로 내려가면 카운트다운 종료
+      // 선 위로 올라가면 카운트다운 종료 (중력이 위쪽이라 안전)
       this.gameOverTimer = 0;
       this.isOverLine = false;
     }
@@ -1774,8 +1774,8 @@ export class MultiplayerGame {
       ctx.textAlign = 'center';
       ctx.fillStyle = '#e94560';
       ctx.font = 'bold 16px Arial';
-      ctx.textBaseline = 'top';
-      ctx.fillText(`WARNING! ${remainingTime}s`, WIDTH / 2, 65);
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`WARNING! ${remainingTime}s`, WIDTH / 2, GAME_OVER_Y - 10);
     }
 
     // 플레이어 목록 (우측)
