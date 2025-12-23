@@ -18,11 +18,11 @@ const DROP_DELAY_MS = 1000; // 턴 시작 후 발사 활성화까지 1초
 const SLINGSHOT_ZONE_TOP = 450;    // 터치 영역 시작 Y좌표
 const MIN_PULL_DISTANCE = 20;      // 최소 당김 거리 (px)
 const MAX_PULL_DISTANCE = 150;     // 최대 당김 거리 (px)
-const MIN_LAUNCH_SPEED = 8;        // 최소 발사 속도
-const MAX_LAUNCH_SPEED = 25;       // 최대 발사 속도
+const MIN_LAUNCH_SPEED = 3;        // 최소 발사 속도 (줄임)
+const MAX_LAUNCH_SPEED = 12;       // 최대 발사 속도 (줄임)
 
-// 합성 시 튀는 속도 (천장에서 아래로 튕김)
-const MERGE_BOUNCE_VELOCITY = 8;   // 아래로 튕김 (양수 = 아래쪽)
+// 합성 시 튕김 계수 (속도 벡터 크기에 비례)
+const MERGE_BOUNCE_MULTIPLIER = 0.8; // 합성 전 속도의 80%로 튕김
 
 // 크기 10 폭발 충격파
 const EXPLOSION_RADIUS = 200;      // 충격파 영향 범위 (px)
@@ -756,7 +756,7 @@ export class MultiplayerGame {
     // 동적 발사 속도 사용 (당기지 않았으면 기본 속도)
     const velocity = (this.launchVelocity.x !== 0 || this.launchVelocity.y !== 0)
       ? this.launchVelocity
-      : { x: 0, y: -MIN_LAUNCH_SPEED };
+      : { x: 0, y: -MAX_LAUNCH_SPEED * 0.5 }; // 타임아웃 시 중간 속도로 발사
 
     if (this.sync.isHost) {
       // 호스트: 직접 과일 생성 및 물리 시뮬레이션
@@ -887,9 +887,13 @@ export class MultiplayerGame {
         const newSize = fruitA.size + 1;
 
         // 두 오브젝트의 속도 벡터 합산 (제거 전에 저장)
+        const avgVx = (bodyA.velocity.x + bodyB.velocity.x) * 0.5;
+        const avgVy = (bodyA.velocity.y + bodyB.velocity.y) * 0.5;
+
+        // 속도 크기에 비례해서 튕김 (느리게 부딪히면 거의 안 튕김)
         const combinedVelocity = {
-          x: (bodyA.velocity.x + bodyB.velocity.x) * 0.5,
-          y: (bodyA.velocity.y + bodyB.velocity.y) * 0.5 + MERGE_BOUNCE_VELOCITY,
+          x: avgVx * MERGE_BOUNCE_MULTIPLIER,
+          y: avgVy * MERGE_BOUNCE_MULTIPLIER,
         };
 
         // 기존 과일 제거
