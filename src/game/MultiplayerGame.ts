@@ -24,6 +24,10 @@ const MAX_LAUNCH_SPEED = 25;       // 최대 발사 속도
 // 합성 시 튀어오르는 속도
 const MERGE_BOUNCE_VELOCITY = -8;  // 위로 튀어오름 (음수 = 위쪽)
 
+// 크기 10 폭발 충격파
+const EXPLOSION_RADIUS = 200;      // 충격파 영향 범위 (px)
+const EXPLOSION_FORCE = 0.05;      // 충격파 힘
+
 type TurnPhase = 'waiting' | 'ready' | 'dropping' | 'settling';
 type SlingshotPhase = 'idle' | 'positioning' | 'pulling';
 
@@ -892,6 +896,7 @@ export class MultiplayerGame {
         // 크기 10이면 폭죽 효과 후 사라짐
         if (newSize >= MAX_FRUIT_SIZE) {
           this.createFirework(midX, midY);
+          this.applyExplosionForce(midX, midY); // 주변 공들에게 충격파
 
           // 점수 추가 (크기 10 보너스) - 마지막 드롭한 플레이어에게
           const scoreGain = FRUIT_DATA[MAX_FRUIT_SIZE - 1]?.score || 0;
@@ -1012,6 +1017,28 @@ export class MultiplayerGame {
         maxLife: 90,
         size: 3 + Math.random() * 4,
       });
+    }
+  }
+
+  // 폭발 충격파 적용 (주변 공들을 밀어냄)
+  private applyExplosionForce(centerX: number, centerY: number): void {
+    for (const [_id, body] of this.fruits) {
+      const dx = body.position.x - centerX;
+      const dy = body.position.y - centerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // 충격파 범위 내의 공들에게만 적용
+      if (distance > 0 && distance < EXPLOSION_RADIUS) {
+        // 거리에 반비례하는 힘 (가까울수록 강함)
+        const forceMagnitude = EXPLOSION_FORCE * (1 - distance / EXPLOSION_RADIUS);
+
+        // 방향 정규화
+        const forceX = (dx / distance) * forceMagnitude;
+        const forceY = (dy / distance) * forceMagnitude;
+
+        // 힘 적용
+        Matter.Body.applyForce(body, body.position, { x: forceX, y: forceY });
+      }
     }
   }
 
