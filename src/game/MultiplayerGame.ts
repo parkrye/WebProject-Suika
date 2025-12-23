@@ -410,8 +410,8 @@ export class MultiplayerGame {
   }
 
   private renderTrajectory(ctx: CanvasRenderingContext2D): void {
-    const gravity = 1; // Matter.js 중력과 동일
-    const steps = 40;  // 궤적 점 개수
+    const gravity = -1; // Matter.js 중력과 동일 (위쪽)
+    const steps = 40;   // 궤적 점 개수
 
     let px = this.dropX;
     let py = LAUNCH_Y;
