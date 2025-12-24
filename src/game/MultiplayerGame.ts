@@ -110,6 +110,16 @@ export class MultiplayerGame {
   // 도시 창문 패턴 (고정)
   private windowPattern: boolean[][] = [];
 
+  // 렌더링 캐시 (성능 최적화)
+  private cachedBackground: HTMLCanvasElement | null = null;
+  private cachedGradient: CanvasGradient | null = null;
+
+  // 이벤트 리스너 바인딩 (정리용)
+  private boundPointerDown: (e: PointerEvent) => void;
+  private boundPointerMove: (e: PointerEvent) => void;
+  private boundPointerUp: (e: PointerEvent) => void;
+  private boundContextMenu: (e: Event) => void;
+
   // 오디오 매니저
   private audio: AudioManager;
 
@@ -123,6 +133,12 @@ export class MultiplayerGame {
 
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
+
+    // 이벤트 리스너 바인딩 초기화
+    this.boundPointerDown = this.handlePointerDown.bind(this);
+    this.boundPointerMove = this.handlePointerMove.bind(this);
+    this.boundPointerUp = this.handlePointerUp.bind(this);
+    this.boundContextMenu = (e: Event) => e.preventDefault();
 
     // Matter.js 엔진 생성 (호스트만 실제로 물리 계산)
     this.engine = Matter.Engine.create();
@@ -149,6 +165,9 @@ export class MultiplayerGame {
 
     // 도시 창문 패턴 생성 (고정)
     this.generateWindowPattern();
+
+    // 렌더링 캐시 생성 (성능 최적화)
+    this.createRenderCache();
   }
 
   private generateWindowPattern(): void {
@@ -172,18 +191,111 @@ export class MultiplayerGame {
   private setupInput(): void {
     const canvas = this.ctx.canvas;
 
-    // 캔버스에 포인터 이벤트 바인딩
-    canvas.addEventListener('pointerdown', this.handlePointerDown.bind(this));
-    canvas.addEventListener('pointermove', this.handlePointerMove.bind(this));
-    canvas.addEventListener('pointerup', this.handlePointerUp.bind(this));
-    canvas.addEventListener('pointerleave', this.handlePointerUp.bind(this));
-    canvas.addEventListener('pointercancel', this.handlePointerUp.bind(this));
+    // 캔버스에 포인터 이벤트 바인딩 (저장된 바인딩 사용)
+    canvas.addEventListener('pointerdown', this.boundPointerDown);
+    canvas.addEventListener('pointermove', this.boundPointerMove);
+    canvas.addEventListener('pointerup', this.boundPointerUp);
+    canvas.addEventListener('pointerleave', this.boundPointerUp);
+    canvas.addEventListener('pointercancel', this.boundPointerUp);
 
     // 컨텍스트 메뉴 방지
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('contextmenu', this.boundContextMenu);
 
     // 터치 디바이스에서 스크롤 방지
     canvas.style.touchAction = 'none';
+  }
+
+  // 렌더링 캐시 생성 (배경, 별, 도시 스카이라인을 미리 그림)
+  private createRenderCache(): void {
+    // 그라디언트 캐시
+    this.cachedGradient = this.ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    this.cachedGradient.addColorStop(0, '#0a0a1a');
+    this.cachedGradient.addColorStop(0.4, '#1a1a3a');
+    this.cachedGradient.addColorStop(0.7, '#2a1a4a');
+    this.cachedGradient.addColorStop(1, '#1a1a3a');
+
+    // 정적 배경 캐시 (그라디언트 + 별 + 도시 스카이라인)
+    this.cachedBackground = document.createElement('canvas');
+    this.cachedBackground.width = WIDTH;
+    this.cachedBackground.height = HEIGHT;
+    const bgCtx = this.cachedBackground.getContext('2d')!;
+
+    // 배경 그라디언트
+    bgCtx.fillStyle = this.cachedGradient;
+    bgCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // 별 그리기 (정적)
+    const stars = [
+      { x: 30, y: 40, size: 1.5 }, { x: 80, y: 25, size: 1 },
+      { x: 150, y: 50, size: 2 }, { x: 200, y: 30, size: 1 },
+      { x: 250, y: 60, size: 1.5 }, { x: 320, y: 35, size: 1 },
+      { x: 370, y: 55, size: 2 }, { x: 50, y: 80, size: 1 },
+      { x: 120, y: 70, size: 1.5 }, { x: 280, y: 75, size: 1 },
+      { x: 350, y: 85, size: 1.5 }, { x: 180, y: 90, size: 1 },
+    ];
+    bgCtx.fillStyle = '#ffffff';
+    bgCtx.globalAlpha = 0.8;
+    for (const star of stars) {
+      bgCtx.beginPath();
+      bgCtx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+      bgCtx.fill();
+    }
+    bgCtx.globalAlpha = 1;
+
+    // 도시 스카이라인 그리기 (정적)
+    this.renderCitySkylineToCanvas(bgCtx);
+  }
+
+  // 도시 스카이라인을 지정된 캔버스에 그림
+  private renderCitySkylineToCanvas(ctx: CanvasRenderingContext2D): void {
+    const skylineY = HEIGHT - 80;
+
+    // 뒷줄 건물 (어둡게)
+    ctx.fillStyle = '#151525';
+    const backBuildings = [
+      { x: 0, w: 40, h: 60 }, { x: 35, w: 30, h: 80 },
+      { x: 60, w: 45, h: 50 }, { x: 100, w: 35, h: 70 },
+      { x: 130, w: 50, h: 55 }, { x: 175, w: 40, h: 75 },
+      { x: 210, w: 45, h: 60 }, { x: 250, w: 35, h: 85 },
+      { x: 280, w: 50, h: 50 }, { x: 325, w: 40, h: 70 },
+      { x: 360, w: 45, h: 65 },
+    ];
+    for (const b of backBuildings) {
+      ctx.fillRect(b.x, skylineY - b.h + 20, b.w, b.h);
+    }
+
+    // 앞줄 건물
+    ctx.fillStyle = '#1a1a2e';
+    const frontBuildings = [
+      { x: 10, w: 35, h: 50 }, { x: 50, w: 25, h: 65 },
+      { x: 80, w: 40, h: 45 }, { x: 125, w: 30, h: 60 },
+      { x: 160, w: 45, h: 40 }, { x: 200, w: 35, h: 70 },
+      { x: 240, w: 40, h: 55 }, { x: 285, w: 30, h: 75 },
+      { x: 320, w: 45, h: 45 }, { x: 365, w: 35, h: 60 },
+    ];
+    for (const b of frontBuildings) {
+      ctx.fillRect(b.x, skylineY - b.h + 30, b.w, b.h + 50);
+    }
+
+    // 창문 불빛 (고정 패턴 사용)
+    ctx.fillStyle = '#ffcc0066';
+    for (let bi = 0; bi < frontBuildings.length; bi++) {
+      const b = frontBuildings[bi];
+      const pattern = this.windowPattern[bi] || [];
+      const windowRows = Math.floor(b.h / 12);
+      const windowCols = Math.floor(b.w / 10);
+      let idx = 0;
+      for (let row = 0; row < windowRows; row++) {
+        for (let col = 0; col < windowCols; col++) {
+          if (pattern[idx]) {
+            const wx = b.x + 5 + col * 10;
+            const wy = skylineY - b.h + 35 + row * 12;
+            ctx.fillRect(wx, wy, 4, 6);
+          }
+          idx++;
+        }
+      }
+    }
   }
 
   private getCanvasPosition(e: PointerEvent): { x: number; y: number } {
@@ -596,7 +708,6 @@ export class MultiplayerGame {
 
     // 호스트 부재 감지 및 승격 처리
     if (this.sync.shouldBecomeHost) {
-      console.log('[Game] 호스트 부재 감지, 새 호스트로 승격 시도');
       this.sync.promoteToHost();
       return; // 승격 후 다음 room_update에서 처리
     }
@@ -621,19 +732,12 @@ export class MultiplayerGame {
     );
 
     if (hasDisconnected) {
-      console.log('[Host] 연결 해제된 플레이어 감지, 정리 중...');
       this.sync.cleanupDisconnectedPlayers();
     }
   }
 
   // 호스트 전용: 비호스트가 드롭한 새 과일만 물리 엔진에 추가
   private addNewFruitsFromRemote(): void {
-    const remoteCount = Object.keys(this.remoteFruits).length;
-    const localCount = this.fruits.size;
-    if (this.frameCount % 60 === 0 && remoteCount > 0) {
-      console.log('[Host] addNewFruitsFromRemote - remote:', remoteCount, 'local:', localCount);
-    }
-
     for (const [id, fruitState] of Object.entries(this.remoteFruits)) {
       // 최근 삭제된 과일은 무시 (Firebase 동기화 지연으로 인한 재생성 방지)
       if (this.deletedFruitIds.has(id)) {
@@ -641,7 +745,6 @@ export class MultiplayerGame {
       }
       if (!this.fruits.has(id)) {
         // 새 과일 생성 (비호스트가 드롭한 것)
-        console.log('[Host] 비호스트 과일 추가:', id, 'x:', fruitState.x, 'y:', fruitState.y, 'size:', fruitState.size);
         this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
       }
       // 기존 과일 위치는 업데이트하지 않음 (호스트가 물리 시뮬레이션 권위자)
@@ -664,7 +767,6 @@ export class MultiplayerGame {
     if (this.pendingDropFruitId && !this.pendingDropSynced && remoteCount > 0) {
       // Firebase에서 첫 번째 과일 업데이트가 왔으면 임시 과일 제거
       this.pendingDropSynced = true;
-      console.log('[Sync] Firebase 동기화 완료, 임시 과일 제거 예정:', this.pendingDropFruitId);
     }
 
     // 원격에 없는 로컬 과일 제거
@@ -673,7 +775,6 @@ export class MultiplayerGame {
         // 임시 과일은 동기화 완료 후에만 제거
         if (id === this.pendingDropFruitId) {
           if (this.pendingDropSynced) {
-            console.log('[Sync] 임시 과일 제거:', id);
             Matter.Composite.remove(this.engine.world, body);
             this.fruits.delete(id);
             this.pendingDropFruitId = null;
@@ -709,18 +810,15 @@ export class MultiplayerGame {
 
     // 이미 처리한 턴이면 무시 (중복 방지)
     if (room.turnStartTime === this.lastTurnStartTime) {
-      console.log('[TurnStart] 중복 이벤트 무시');
       return;
     }
 
     // settling 중이면 턴 시작 무시
     if (this.turnPhase === 'settling') {
-      console.log('[TurnStart] settling 중이므로 무시');
       return;
     }
 
     this.lastTurnStartTime = room.turnStartTime;
-    console.log('[TurnStart] playerId:', _playerId, 'isMyTurn:', this.sync.isMyTurn, 'turnStartTime:', room.turnStartTime);
 
     this.stopTimer();
     this.clearDropDelay();
@@ -743,11 +841,9 @@ export class MultiplayerGame {
 
     // 내 턴이면 타이머 시작 + 1초 뒤 드롭 활성화
     if (this.sync.isMyTurn) {
-      console.log('[TurnStart] 내 턴! 타이머 시작');
       this.startTimer();
       this.dropDelayTimer = window.setTimeout(() => {
         this.dropEnabled = true;
-        console.log('[TurnStart] 드롭 활성화');
       }, DROP_DELAY_MS);
     }
   }
@@ -777,16 +873,12 @@ export class MultiplayerGame {
   ): void {
     if (!this.sync.isHost) return;
 
-    console.log('[DropRequest] 호스트가 발사 요청 처리:', playerId, 'x:', x, 'size:', size, 'velocity:', velocityX, velocityY);
-
     // 드롭 프레임 기록
     this.lastDropFrame = this.frameCount;
     this.lastDropPlayerId = playerId; // 합성 점수용
 
     // 고유 ID 생성
     const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-    console.log('[DropRequest] 호스트가 과일 발사:', fruitId);
 
     // 물리 엔진에 과일 생성 (발사 위치와 전달받은 속도)
     this.createFruitWithId(
@@ -830,7 +922,6 @@ export class MultiplayerGame {
   }
 
   private launchFruit(): void {
-    console.log('[Launch] 시도 - isMyTurn:', this.sync.isMyTurn, 'turnPhase:', this.turnPhase, 'dropEnabled:', this.dropEnabled, 'isHost:', this.sync.isHost);
     if (!this.sync.isMyTurn || this.turnPhase !== 'ready' || !this.dropEnabled) return;
 
     this.stopTimer();
@@ -853,8 +944,6 @@ export class MultiplayerGame {
       this.droppedFruitId = fruitId;
       this.lastDropPlayerId = this.sync.playerId; // 합성 점수용
 
-      console.log('[Launch] 호스트가 직접 과일 발사:', fruitId, 'x:', this.dropX, 'velocity:', velocity);
-
       // 발사 위치와 동적 속도로 생성
       this.createFruitWithId(
         fruitId,
@@ -873,8 +962,6 @@ export class MultiplayerGame {
       this.sync.dropFruitWithVelocity(fruitId, this.dropX, LAUNCH_Y, this.currentFruitSize, velocity);
     } else {
       // 비호스트: 드롭 요청 전송 + 로컬 예측 렌더링용 임시 과일 생성
-      console.log('[Launch] 비호스트가 발사 요청 전송:', 'x:', this.dropX, 'velocity:', velocity);
-
       // 로컬 예측 렌더링용 임시 과일 생성 (발사 애니메이션)
       const tempFruitId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       this.pendingDropFruitId = tempFruitId;
@@ -899,8 +986,6 @@ export class MultiplayerGame {
     // 슬링샷 상태 초기화
     this.slingshotPhase = 'idle';
     this.launchVelocity = { x: 0, y: 0 };
-
-    console.log('[Launch] settling 상태로 전환, 타이머 리셋');
   }
 
   private createFruitWithId(
@@ -958,15 +1043,6 @@ export class MultiplayerGame {
       const fruitA = this.parseFruitLabel(pair.bodyA.label);
       const fruitB = this.parseFruitLabel(pair.bodyB.label);
 
-      // 디버깅: 충돌 정보 출력
-      const labelA = pair.bodyA.label;
-      const labelB = pair.bodyB.label;
-      const wasInFlightA = fruitA && this.inFlightFruits.has(fruitA.id);
-      const wasInFlightB = fruitB && this.inFlightFruits.has(fruitB.id);
-      if (wasInFlightA || wasInFlightB) {
-        console.log('[Collision] 비행 중 과일 충돌:', labelA, 'vs', labelB);
-      }
-
       // 벽이나 다른 오브젝트와 충돌 시 비행 상태 해제
       if (fruitA) this.inFlightFruits.delete(fruitA.id);
       if (fruitB) this.inFlightFruits.delete(fruitB.id);
@@ -988,8 +1064,6 @@ export class MultiplayerGame {
           this.mergedPairs.delete(pairKey);
           return;
         }
-
-        console.log('[Merge] 합성:', fruitA.id, '(size:', fruitA.size, ') +', fruitB.id, '(size:', fruitB.size, ')');
 
         const midX = (bodyA.position.x + bodyB.position.x) / 2;
         const midY = (bodyA.position.y + bodyB.position.y) / 2;
@@ -1108,7 +1182,6 @@ export class MultiplayerGame {
 
       // 게임오버 체크
       if (this.gameOverTimer >= GAME_OVER_CHECK_FRAMES) {
-        console.log('[GameOver] 2초 동안 라인 위에 있어서 게임오버');
         this.sync.reportGameOver();
       }
     } else {
@@ -1190,95 +1263,15 @@ export class MultiplayerGame {
     ctx.globalAlpha = 1;
   }
 
-  // 별 렌더링
-  private renderStars(ctx: CanvasRenderingContext2D): void {
-    const stars = [
-      { x: 30, y: 40, size: 1.5 }, { x: 80, y: 25, size: 1 },
-      { x: 150, y: 50, size: 2 }, { x: 200, y: 30, size: 1 },
-      { x: 250, y: 60, size: 1.5 }, { x: 320, y: 35, size: 1 },
-      { x: 370, y: 55, size: 2 }, { x: 50, y: 80, size: 1 },
-      { x: 120, y: 70, size: 1.5 }, { x: 280, y: 75, size: 1 },
-      { x: 350, y: 85, size: 1.5 }, { x: 180, y: 90, size: 1 },
-    ];
-
-    const twinkle = Math.sin(this.frameCount * 0.05) * 0.3 + 0.7;
-
-    for (const star of stars) {
-      ctx.globalAlpha = twinkle + Math.sin(star.x * 0.1 + this.frameCount * 0.03) * 0.2;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  // 도시 실루엣 렌더링
-  private renderCitySkyline(ctx: CanvasRenderingContext2D): void {
-    const skylineY = HEIGHT - 80;
-
-    // 뒷줄 건물 (어둡게)
-    ctx.fillStyle = '#151525';
-    const backBuildings = [
-      { x: 0, w: 40, h: 60 }, { x: 35, w: 30, h: 80 },
-      { x: 60, w: 45, h: 50 }, { x: 100, w: 35, h: 70 },
-      { x: 130, w: 50, h: 55 }, { x: 175, w: 40, h: 75 },
-      { x: 210, w: 45, h: 60 }, { x: 250, w: 35, h: 85 },
-      { x: 280, w: 50, h: 50 }, { x: 325, w: 40, h: 70 },
-      { x: 360, w: 45, h: 65 },
-    ];
-    for (const b of backBuildings) {
-      ctx.fillRect(b.x, skylineY - b.h + 20, b.w, b.h);
-    }
-
-    // 앞줄 건물
-    ctx.fillStyle = '#1a1a2e';
-    const frontBuildings = [
-      { x: 10, w: 35, h: 50 }, { x: 50, w: 25, h: 65 },
-      { x: 80, w: 40, h: 45 }, { x: 125, w: 30, h: 60 },
-      { x: 160, w: 45, h: 40 }, { x: 200, w: 35, h: 70 },
-      { x: 240, w: 40, h: 55 }, { x: 285, w: 30, h: 75 },
-      { x: 320, w: 45, h: 45 }, { x: 365, w: 35, h: 60 },
-    ];
-    for (const b of frontBuildings) {
-      ctx.fillRect(b.x, skylineY - b.h + 30, b.w, b.h + 50);
-    }
-
-    // 창문 불빛 (고정 패턴 사용)
-    ctx.fillStyle = '#ffcc0066';
-    for (let bi = 0; bi < frontBuildings.length; bi++) {
-      const b = frontBuildings[bi];
-      const pattern = this.windowPattern[bi] || [];
-      const windowRows = Math.floor(b.h / 12);
-      const windowCols = Math.floor(b.w / 10);
-      let idx = 0;
-      for (let row = 0; row < windowRows; row++) {
-        for (let col = 0; col < windowCols; col++) {
-          if (pattern[idx]) {
-            const wx = b.x + 5 + col * 10;
-            const wy = skylineY - b.h + 35 + row * 12;
-            ctx.fillRect(wx, wy, 4, 6);
-          }
-          idx++;
-        }
-      }
-    }
-  }
-
   private async nextTurn(): Promise<void> {
-    console.log('[NextTurn] 호출됨 - isHost:', this.sync.isHost, 'isMyTurn:', this.sync.isMyTurn);
-
     // 게임오버는 게임 루프에서 타이머 기반으로 검사하므로 여기서는 체크하지 않음
 
     // 다음 과일 크기 결정 (확률 시스템)
     const nextSize = this.getNextFruitSize();
 
-    console.log('[NextTurn] 다음 과일 크기:', nextSize, '서버 요청 중...');
-
     // 서버에 다음 턴 요청 (현재 턴 플레이어만)
     if (this.sync.isMyTurn) {
       await this.sync.nextTurn(nextSize);
-      console.log('[NextTurn] 서버 요청 완료');
     }
   }
 
@@ -1689,7 +1682,6 @@ export class MultiplayerGame {
 
         if (x - radius <= 5 || x + radius >= WIDTH - 5 ||
             y - radius <= CEILING_Y + 5 || y + radius >= HEIGHT - 5) {
-          console.log('[Flight] 경계 도달, 비행 상태 해제:', fruitId, 'pos:', x, y);
           this.inFlightFruits.delete(fruitId);
           continue;
         }
@@ -1724,7 +1716,6 @@ export class MultiplayerGame {
       this.settleCheckTimer++;
       // 거의 즉시 다음 턴으로
       if (this.settleCheckTimer > SETTLE_FRAMES) {
-        console.log('[Settle] 안정화 완료, 다음 턴으로');
         this.settleCheckTimer = 0;
         this.turnPhase = 'waiting';
         this.nextTurn();
@@ -1743,20 +1734,10 @@ export class MultiplayerGame {
   private render(): void {
     const ctx = this.ctx;
 
-    // 배경 - 밤하늘 그라데이션
-    const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-    gradient.addColorStop(0, '#0a0a1a');
-    gradient.addColorStop(0.4, '#1a1a3a');
-    gradient.addColorStop(0.7, '#2a1a4a');
-    gradient.addColorStop(1, '#1a1a3a');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-    // 별 그리기
-    this.renderStars(ctx);
-
-    // 도시 실루엣
-    this.renderCitySkyline(ctx);
+    // 캐시된 배경 사용 (그라디언트 + 별 + 도시 스카이라인)
+    if (this.cachedBackground) {
+      ctx.drawImage(this.cachedBackground, 0, 0);
+    }
 
     // 벽 (도시 테마)
     ctx.fillStyle = '#2a1a3a';
@@ -1796,13 +1777,6 @@ export class MultiplayerGame {
   }
 
   private renderLocalFruits(ctx: CanvasRenderingContext2D): void {
-    // 디버깅: 과일 개수 및 위치 확인
-    if (this.frameCount % 60 === 0 && this.fruits.size > 0) {
-      for (const [id, fruit] of this.fruits) {
-        console.log('[Render] 과일:', id.substring(0, 20), 'pos:', Math.round(fruit.position.x), Math.round(fruit.position.y));
-      }
-    }
-
     for (const [, fruit] of this.fruits) {
       const { x, y } = fruit.position;
       const parsed = this.parseFruitLabel(fruit.label);
@@ -2005,17 +1979,28 @@ export class MultiplayerGame {
     Matter.World.clear(this.engine.world, false);
     Matter.Engine.clear(this.engine);
 
+    // 이벤트 리스너 정리
+    const canvas = this.ctx.canvas;
+    canvas.removeEventListener('pointerdown', this.boundPointerDown);
+    canvas.removeEventListener('pointermove', this.boundPointerMove);
+    canvas.removeEventListener('pointerup', this.boundPointerUp);
+    canvas.removeEventListener('pointerleave', this.boundPointerUp);
+    canvas.removeEventListener('pointercancel', this.boundPointerUp);
+    canvas.removeEventListener('contextmenu', this.boundContextMenu);
+
     // 타이머 정리
     if (this.dropDelayTimer) {
       clearTimeout(this.dropDelayTimer);
     }
+
+    // 캐시 정리
+    this.cachedBackground = null;
+    this.cachedGradient = null;
 
     // 게임오버 오버레이 제거
     const overlay = document.querySelector('.game-over-overlay');
     if (overlay) {
       overlay.remove();
     }
-
-    console.log('[Game] 게임 정리 완료');
   }
 }
