@@ -76,6 +76,8 @@ export class Lobby {
         background-clip: text;
         text-shadow: none;
         filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
+        text-align: center;
+        width: 100%;
       }
       .lobby-section {
         display: flex;
