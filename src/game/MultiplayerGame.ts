@@ -1663,7 +1663,8 @@ export class MultiplayerGame {
 
     this.frameCount++;
 
-    // 비행 중인 과일에 중력 상쇄력 적용 (직선 비행)
+    // 비행 중인 과일: 중력 무시하고 직선 비행
+    // 방법: 중력을 상쇄하지 않고, 매 프레임 속도를 유지
     for (const fruitId of this.inFlightFruits) {
       const body = this.fruits.get(fruitId);
       if (body) {
@@ -1679,9 +1680,14 @@ export class MultiplayerGame {
           continue;
         }
 
-        // 중력 상쇄 (gravity.y = -1 이므로, 아래쪽 힘으로 상쇄)
-        const antiGravity = { x: 0, y: body.mass * 1 }; // gravity.y = -1의 반대
-        Matter.Body.applyForce(body, body.position, antiGravity);
+        // 비행 중에는 중력 영향 제거: 속도에서 중력 효과 상쇄
+        // gravity.y = -1 이므로, 매 프레임 velocity.y에 +1이 더해짐 (위로 가속)
+        // 이를 상쇄하려면 velocity.y에서 -1을 빼야 함 (실제로는 더해진 만큼 빼기)
+        const gravityEffect = this.engine.world.gravity.y;
+        Matter.Body.setVelocity(body, {
+          x: body.velocity.x,
+          y: body.velocity.y - gravityEffect // 중력 효과 상쇄
+        });
       }
     }
 
