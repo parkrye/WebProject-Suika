@@ -6,6 +6,8 @@ import { AudioManager } from '../core/AudioManager';
 
 const WIDTH = 400;
 const HEIGHT = 600;
+const UI_AREA_HEIGHT = 70;    // 상단 UI 영역 높이
+const CEILING_Y = UI_AREA_HEIGHT; // 천장 Y좌표 (오브젝트가 여기에 쌓임)
 const LAUNCH_Y = 540;         // 발사 위치 (하단)
 const GAME_OVER_Y = 500;      // 게임오버 라인 (하단, 오브젝트가 여기까지 내려오면 위험)
 const TURN_TIME = 10;
@@ -14,15 +16,16 @@ const GAME_OVER_CHECK_FRAMES = 120; // 게임오버 판정까지 2초 (60fps * 2
 const DROP_GRACE_FRAMES = 180; // 드롭 후 3초 동안은 게임오버 체크 안함
 const DROP_DELAY_MS = 1000; // 턴 시작 후 발사 활성화까지 1초
 
-// 슬링샷 관련 상수
-const SLINGSHOT_ZONE_TOP = 450;    // 터치 영역 시작 Y좌표
-const MIN_PULL_DISTANCE = 20;      // 최소 당김 거리 (px)
-const MAX_PULL_DISTANCE = 150;     // 최대 당김 거리 (px)
-const MIN_LAUNCH_SPEED = 3;        // 최소 발사 속도 (줄임)
-const MAX_LAUNCH_SPEED = 12;       // 최대 발사 속도 (줄임)
+// 슬링샷 관련 상수 (모바일 최적화)
+const SLINGSHOT_ZONE_TOP = 350;    // 터치 영역 시작 Y좌표 (넓은 터치 영역)
+const PULL_START_THRESHOLD = 30;   // 당기기 시작 임계값 (LAUNCH_Y 기준 아래로 이 거리)
+const MIN_PULL_DISTANCE = 40;      // 최소 당김 거리 (모바일에서 실수 방지)
+const MAX_PULL_DISTANCE = 120;     // 최대 당김 거리 (손가락 이동 범위 고려)
+const MIN_LAUNCH_SPEED = 5;        // 최소 발사 속도
+const MAX_LAUNCH_SPEED = 15;       // 최대 발사 속도
 
 // 합성 시 튕김 계수 (속도 벡터 크기에 비례)
-const MERGE_BOUNCE_MULTIPLIER = 0.8; // 합성 전 속도의 80%로 튕김
+const MERGE_BOUNCE_MULTIPLIER = 1.2; // 합성 전 속도의 120%로 튕김
 
 // 크기 10 폭발 충격파
 const EXPLOSION_RADIUS = 200;      // 충격파 영향 범위 (px)
@@ -81,7 +84,9 @@ export class MultiplayerGame {
   private slingshotCurrentX = 0;
   private slingshotCurrentY = 0;
   private launchVelocity: { x: number; y: number } = { x: 0, y: 0 };
-  private originalDropX = 0; // 터치 전 원래 X 좌표 (취소 시 복원용)
+
+  // 비행 중인 과일 (중력 무시, 충돌 시 해제)
+  private inFlightFruits = new Set<string>();
 
   // 충돌 처리
   private mergedPairs = new Set<string>();
@@ -125,8 +130,8 @@ export class MultiplayerGame {
       Matter.Bodies.rectangle(WIDTH / 2, HEIGHT + 10, WIDTH + 40, 20, { isStatic: true, label: 'floor' }),
       Matter.Bodies.rectangle(-10, HEIGHT / 2, 20, HEIGHT * 2, { isStatic: true, label: 'wall' }),
       Matter.Bodies.rectangle(WIDTH + 10, HEIGHT / 2, 20, HEIGHT * 2, { isStatic: true, label: 'wall' }),
-      // 천장 (폭죽이 화면 밖으로 나가지 않도록)
-      Matter.Bodies.rectangle(WIDTH / 2, -10, WIDTH + 40, 20, { isStatic: true, label: 'ceiling' }),
+      // 천장 (UI 영역 아래, 폭죽이 여기에 쌓임)
+      Matter.Bodies.rectangle(WIDTH / 2, CEILING_Y - 10, WIDTH + 40, 20, { isStatic: true, label: 'ceiling' }),
     ];
     Matter.Composite.add(this.engine.world, walls);
 
@@ -194,18 +199,17 @@ export class MultiplayerGame {
 
     // 터치 영역(하단) 체크
     if (y >= SLINGSHOT_ZONE_TOP && y <= HEIGHT) {
-      // 터치 전 원래 위치 저장 (취소 시 복원용)
-      this.originalDropX = this.dropX;
-
       this.slingshotPhase = 'positioning';
-      this.slingshotStartX = x;
-      this.slingshotStartY = y;
       this.slingshotCurrentX = x;
       this.slingshotCurrentY = y;
 
       // 폭죽을 터치 X 위치로 이동
       const radius = FRUIT_DATA[this.currentFruitSize - 1].radius;
       this.dropX = Math.max(radius + 4, Math.min(WIDTH - radius - 4, x));
+
+      // 당김 시작 위치는 현재 dropX 위치 (X 이동 후 당기기 시작점)
+      this.slingshotStartX = this.dropX;
+      this.slingshotStartY = LAUNCH_Y;
 
       // 포인터 캡처
       this.ctx.canvas.setPointerCapture(e.pointerId);
@@ -220,16 +224,21 @@ export class MultiplayerGame {
     this.slingshotCurrentY = y;
 
     if (this.slingshotPhase === 'positioning') {
-      // 아직 터치 영역 내 - 수평 이동만
-      if (y >= SLINGSHOT_ZONE_TOP && y <= HEIGHT) {
+      // 발사 위치 기준으로 아래로 일정 거리 드래그하면 당기기 시작
+      const pullThreshold = LAUNCH_Y + PULL_START_THRESHOLD;
+
+      if (y <= pullThreshold) {
+        // 아직 당기기 전 - 수평 이동 가능
         const radius = FRUIT_DATA[this.currentFruitSize - 1].radius;
         this.dropX = Math.max(radius + 4, Math.min(WIDTH - radius - 4, x));
-        // 시작 위치도 업데이트 (스와이프)
-        this.slingshotStartX = x;
-        this.slingshotStartY = y;
-      } else if (y > HEIGHT) {
-        // 아래로 당김 시작
+        // 당김 시작 위치도 현재 dropX로 업데이트
+        this.slingshotStartX = this.dropX;
+        this.slingshotStartY = LAUNCH_Y;
+      } else {
+        // 아래로 당김 시작 (X는 현재 위치 고정)
         this.slingshotPhase = 'pulling';
+        this.slingshotStartX = this.dropX;
+        this.slingshotStartY = LAUNCH_Y;
         this.calculateLaunchVelocity();
       }
     } else if (this.slingshotPhase === 'pulling') {
@@ -240,8 +249,6 @@ export class MultiplayerGame {
 
   private handlePointerUp(e: PointerEvent): void {
     if (this.slingshotPhase === 'idle') return;
-
-    let launched = false;
 
     if (this.slingshotPhase === 'pulling') {
       // 발사 속도 계산
@@ -254,14 +261,10 @@ export class MultiplayerGame {
       // 최소 당김 거리 이상이면 발사
       if (pullDistance >= MIN_PULL_DISTANCE) {
         this.launchFruit();
-        launched = true;
       }
+      // 당김이 부족하면 발사 안함, X 위치는 유지
     }
-
-    // 발사하지 않았으면 원래 위치로 복원
-    if (!launched) {
-      this.dropX = this.originalDropX;
-    }
+    // positioning 상태에서 터치를 떼면 X 위치 유지 (발사 안함)
 
     // 상태 초기화
     this.slingshotPhase = 'idle';
@@ -306,21 +309,32 @@ export class MultiplayerGame {
   private renderSlingshotUI(ctx: CanvasRenderingContext2D): void {
     const data = FRUIT_DATA[this.currentFruitSize - 1];
 
-    // 터치 영역 힌트 (하단 영역)
+    // 터치 영역 힌트 (하단 영역) - idle 상태에서만
     if (this.slingshotPhase === 'idle' && this.dropEnabled) {
+      // 터치 힌트 영역
       const gradient = ctx.createLinearGradient(0, SLINGSHOT_ZONE_TOP, 0, HEIGHT);
       gradient.addColorStop(0, 'rgba(255, 107, 157, 0)');
-      gradient.addColorStop(0.5, 'rgba(255, 107, 157, 0.05)');
-      gradient.addColorStop(1, 'rgba(255, 107, 157, 0.1)');
+      gradient.addColorStop(0.5, 'rgba(255, 107, 157, 0.08)');
+      gradient.addColorStop(1, 'rgba(255, 107, 157, 0.15)');
       ctx.fillStyle = gradient;
       ctx.fillRect(0, SLINGSHOT_ZONE_TOP, WIDTH, HEIGHT - SLINGSHOT_ZONE_TOP);
 
+      // 아래 화살표 아이콘
+      const arrowY = LAUNCH_Y + 35;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.beginPath();
+      ctx.moveTo(WIDTH / 2, arrowY + 15);
+      ctx.lineTo(WIDTH / 2 - 12, arrowY);
+      ctx.lineTo(WIDTH / 2 + 12, arrowY);
+      ctx.closePath();
+      ctx.fill();
+
       // 터치 힌트 텍스트
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.font = '12px Arial';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.font = 'bold 14px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('Touch & Pull Down to Launch', WIDTH / 2, (SLINGSHOT_ZONE_TOP + HEIGHT) / 2);
+      ctx.fillText('Pull Down', WIDTH / 2, arrowY + 35);
     }
 
     if (this.slingshotPhase === 'pulling') {
@@ -330,17 +344,26 @@ export class MultiplayerGame {
       const pullDistance = Math.sqrt(pullDx * pullDx + pullDy * pullDy);
       const clampedPull = Math.min(pullDistance, MAX_PULL_DISTANCE);
       const stretchFactor = pullDistance > 0 ? clampedPull / pullDistance : 0;
+      const powerRatio = clampedPull / MAX_PULL_DISTANCE; // 0~1 당김 강도
+
+      // 발사 가능 여부
+      const canLaunch = pullDistance >= MIN_PULL_DISTANCE;
 
       // 당겨진 폭죽 위치
       const fruitX = this.dropX + pullDx * stretchFactor * 0.5;
       const fruitY = LAUNCH_Y + pullDy * stretchFactor * 0.5;
 
+      // 고무줄 색상 (당김 강도에 따라 변화)
+      const rubberColor = canLaunch
+        ? `rgb(${255}, ${Math.floor(107 - powerRatio * 50)}, ${Math.floor(157 - powerRatio * 100)})`
+        : 'rgba(255, 107, 157, 0.5)';
+
       // 고무줄 (앵커에서 폭죽으로)
       const anchorLeft = this.dropX - 25;
       const anchorRight = this.dropX + 25;
 
-      ctx.strokeStyle = '#ff6b9d';
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = rubberColor;
+      ctx.lineWidth = 3 + powerRatio * 2;
       ctx.lineCap = 'round';
 
       ctx.beginPath();
@@ -354,10 +377,32 @@ export class MultiplayerGame {
       ctx.stroke();
 
       // 앵커 포인트
-      ctx.fillStyle = '#ff6b9d';
+      ctx.fillStyle = rubberColor;
       ctx.beginPath();
-      ctx.arc(anchorLeft, LAUNCH_Y, 5, 0, Math.PI * 2);
-      ctx.arc(anchorRight, LAUNCH_Y, 5, 0, Math.PI * 2);
+      ctx.arc(anchorLeft, LAUNCH_Y, 6, 0, Math.PI * 2);
+      ctx.arc(anchorRight, LAUNCH_Y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 파워 게이지 (좌측)
+      const gaugeX = 15;
+      const gaugeY = LAUNCH_Y - 60;
+      const gaugeHeight = 50;
+      const gaugeWidth = 8;
+
+      // 게이지 배경
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.beginPath();
+      ctx.roundRect(gaugeX, gaugeY, gaugeWidth, gaugeHeight, 4);
+      ctx.fill();
+
+      // 게이지 채움
+      const fillHeight = gaugeHeight * powerRatio;
+      const gaugeColor = canLaunch
+        ? `rgb(${Math.floor(100 + powerRatio * 155)}, ${Math.floor(200 - powerRatio * 100)}, 100)`
+        : 'rgba(150, 150, 150, 0.5)';
+      ctx.fillStyle = gaugeColor;
+      ctx.beginPath();
+      ctx.roundRect(gaugeX, gaugeY + gaugeHeight - fillHeight, gaugeWidth, fillHeight, 4);
       ctx.fill();
 
       // 당겨진 폭죽
@@ -365,8 +410,8 @@ export class MultiplayerGame {
       ctx.arc(fruitX, fruitY, data.radius, 0, Math.PI * 2);
       ctx.fillStyle = data.color;
       ctx.fill();
-      ctx.strokeStyle = '#ffffff66';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = canLaunch ? '#ffffff' : '#ffffff44';
+      ctx.lineWidth = canLaunch ? 3 : 2;
       ctx.stroke();
 
       ctx.fillStyle = '#fff';
@@ -375,8 +420,16 @@ export class MultiplayerGame {
       ctx.textBaseline = 'middle';
       ctx.fillText(this.currentFruitSize.toString(), fruitX, fruitY);
 
-      // 궤적 예측선 (당긴 반대 방향)
-      if (this.launchVelocity.x !== 0 || this.launchVelocity.y !== 0) {
+      // 발사 불가 표시 (당김 부족)
+      if (!canLaunch) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Pull more', WIDTH / 2, HEIGHT - 20);
+      }
+
+      // 궤적 예측선 (발사 가능할 때만)
+      if (canLaunch && (this.launchVelocity.x !== 0 || this.launchVelocity.y !== 0)) {
         this.renderTrajectory(ctx);
       }
     } else {
@@ -395,72 +448,102 @@ export class MultiplayerGame {
       ctx.textBaseline = 'middle';
       ctx.fillText(this.currentFruitSize.toString(), this.dropX, LAUNCH_Y);
 
-      // 위치 조정 중이면 X 표시
+      // 위치 조정 중이면 가이드라인 + 힌트
       if (this.slingshotPhase === 'positioning') {
-        ctx.strokeStyle = '#ffffff88';
+        // 수직 가이드라인
+        ctx.strokeStyle = '#ffffff55';
         ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
+        ctx.setLineDash([5, 5]);
         ctx.beginPath();
-        ctx.moveTo(this.dropX, LAUNCH_Y - data.radius - 5);
-        ctx.lineTo(this.dropX, 0);
+        ctx.moveTo(this.dropX, LAUNCH_Y - data.radius - 10);
+        ctx.lineTo(this.dropX, CEILING_Y);
         ctx.stroke();
         ctx.setLineDash([]);
+
+        // 좌우 이동 힌트 화살표
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        // 왼쪽 화살표
+        ctx.beginPath();
+        ctx.moveTo(this.dropX - data.radius - 20, LAUNCH_Y);
+        ctx.lineTo(this.dropX - data.radius - 10, LAUNCH_Y - 8);
+        ctx.lineTo(this.dropX - data.radius - 10, LAUNCH_Y + 8);
+        ctx.closePath();
+        ctx.fill();
+        // 오른쪽 화살표
+        ctx.beginPath();
+        ctx.moveTo(this.dropX + data.radius + 20, LAUNCH_Y);
+        ctx.lineTo(this.dropX + data.radius + 10, LAUNCH_Y - 8);
+        ctx.lineTo(this.dropX + data.radius + 10, LAUNCH_Y + 8);
+        ctx.closePath();
+        ctx.fill();
       }
     }
   }
 
   private renderTrajectory(ctx: CanvasRenderingContext2D): void {
-    const gravity = -1; // Matter.js 중력과 동일 (위쪽)
-    const steps = 40;   // 궤적 점 개수
+    // 직선 궤적 (중력 무시)
+    const vx = this.launchVelocity.x;
+    const vy = this.launchVelocity.y;
+    const speed = Math.sqrt(vx * vx + vy * vy);
 
-    let px = this.dropX;
-    let py = LAUNCH_Y;
-    let vx = this.launchVelocity.x;
-    let vy = this.launchVelocity.y;
+    if (speed < 0.1) return;
 
+    // 방향 정규화
+    const nx = vx / speed;
+    const ny = vy / speed;
+
+    // 직선 궤적 길이 (화면 경계까지)
+    const maxLength = Math.max(WIDTH, HEIGHT);
+    let endX = this.dropX + nx * maxLength;
+    let endY = LAUNCH_Y + ny * maxLength;
+
+    // 화면 경계에서 클리핑
+    if (endX < 0) {
+      const t = -this.dropX / nx;
+      endX = 0;
+      endY = LAUNCH_Y + ny * t;
+    } else if (endX > WIDTH) {
+      const t = (WIDTH - this.dropX) / nx;
+      endX = WIDTH;
+      endY = LAUNCH_Y + ny * t;
+    }
+    if (endY < 0) {
+      const t = -LAUNCH_Y / ny;
+      endX = this.dropX + nx * t;
+      endY = 0;
+    } else if (endY > HEIGHT) {
+      const t = (HEIGHT - LAUNCH_Y) / ny;
+      endX = this.dropX + nx * t;
+      endY = HEIGHT;
+    }
+
+    // 점선 직선 그리기
     ctx.strokeStyle = '#ffffff88';
     ctx.setLineDash([8, 8]);
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(px, py);
-
-    for (let i = 0; i < steps; i++) {
-      // 물리 시뮬레이션 (간단한 버전)
-      vx *= 0.99; // 공기 저항
-      vy += gravity;
-      vy *= 0.99;
-
-      px += vx;
-      py += vy;
-
-      // 화면 밖이면 중지
-      if (px < 0 || px > WIDTH || py < 0 || py > HEIGHT) break;
-
-      ctx.lineTo(px, py);
-    }
-
+    ctx.moveTo(this.dropX, LAUNCH_Y);
+    ctx.lineTo(endX, endY);
     ctx.stroke();
     ctx.setLineDash([]);
 
     // 화살표 끝
-    if (px >= 0 && px <= WIDTH && py >= 0 && py <= HEIGHT) {
-      const angle = Math.atan2(vy, vx);
-      const arrowSize = 8;
+    const angle = Math.atan2(ny, nx);
+    const arrowSize = 8;
 
-      ctx.fillStyle = '#ffffff88';
-      ctx.beginPath();
-      ctx.moveTo(px, py);
-      ctx.lineTo(
-        px - arrowSize * Math.cos(angle - Math.PI / 6),
-        py - arrowSize * Math.sin(angle - Math.PI / 6)
-      );
-      ctx.lineTo(
-        px - arrowSize * Math.cos(angle + Math.PI / 6),
-        py - arrowSize * Math.sin(angle + Math.PI / 6)
-      );
-      ctx.closePath();
-      ctx.fill();
-    }
+    ctx.fillStyle = '#ffffff88';
+    ctx.beginPath();
+    ctx.moveTo(endX, endY);
+    ctx.lineTo(
+      endX - arrowSize * Math.cos(angle - Math.PI / 6),
+      endY - arrowSize * Math.sin(angle - Math.PI / 6)
+    );
+    ctx.lineTo(
+      endX - arrowSize * Math.cos(angle + Math.PI / 6),
+      endY - arrowSize * Math.sin(angle + Math.PI / 6)
+    );
+    ctx.closePath();
+    ctx.fill();
   }
 
   private setupSyncEvents(): void {
@@ -774,6 +857,9 @@ export class MultiplayerGame {
         this.currentFruitSize,
         velocity
       );
+      // 비행 상태로 마크 (충돌 전까지 중력 무시)
+      this.inFlightFruits.add(fruitId);
+
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
 
@@ -794,6 +880,8 @@ export class MultiplayerGame {
         this.currentFruitSize,
         velocity
       );
+      // 비행 상태로 마크 (충돌 전까지 중력 무시)
+      this.inFlightFruits.add(tempFruitId);
 
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
@@ -859,13 +947,17 @@ export class MultiplayerGame {
   }
 
   private handleCollision(event: Matter.IEventCollision<Matter.Engine>): void {
-    // 호스트만 충돌 처리
-    if (!this.sync.isHost) return;
-
     for (const pair of event.pairs) {
+      // 충돌한 과일은 비행 상태 해제 (중력 적용 시작) - 모든 클라이언트
       const fruitA = this.parseFruitLabel(pair.bodyA.label);
       const fruitB = this.parseFruitLabel(pair.bodyB.label);
 
+      // 벽이나 다른 오브젝트와 충돌 시 비행 상태 해제
+      if (fruitA) this.inFlightFruits.delete(fruitA.id);
+      if (fruitB) this.inFlightFruits.delete(fruitB.id);
+
+      // 합성 처리는 호스트만
+      if (!this.sync.isHost) continue;
       if (!fruitA || !fruitB) continue;
       if (fruitA.size !== fruitB.size) continue;
 
@@ -1560,6 +1652,16 @@ export class MultiplayerGame {
 
     this.frameCount++;
 
+    // 비행 중인 과일에 중력 상쇄력 적용 (직선 비행)
+    for (const fruitId of this.inFlightFruits) {
+      const body = this.fruits.get(fruitId);
+      if (body) {
+        // 중력 상쇄 (gravity.y = -1 이므로, 아래쪽 힘으로 상쇄)
+        const antiGravity = { x: 0, y: body.mass * 1 }; // gravity.y = -1의 반대
+        Matter.Body.applyForce(body, body.position, antiGravity);
+      }
+    }
+
     // 호스트: 전체 물리 시뮬레이션
     // 비호스트: 임시 과일 물리 시뮬레이션 (예측 렌더링용)
     if (this.sync.isHost) {
@@ -1728,45 +1830,60 @@ export class MultiplayerGame {
     const ctx = this.ctx;
     const room = this.sync.room;
 
-    // 점수
+    // === UI는 상단 영역에 표시 (천장 위, 오브젝트와 겹치지 않음) ===
+    const UI_TOP = 8; // 상단 여백
+
+    // UI 영역 배경 (반투명)
+    ctx.fillStyle = 'rgba(10, 10, 26, 0.8)';
+    ctx.fillRect(0, 0, WIDTH, UI_AREA_HEIGHT);
+
+    // UI 영역 하단 경계선
+    ctx.strokeStyle = 'rgba(255, 107, 157, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, UI_AREA_HEIGHT);
+    ctx.lineTo(WIDTH, UI_AREA_HEIGHT);
+    ctx.stroke();
+
+    // 점수 (상단 좌측)
     ctx.fillStyle = '#fff';
     ctx.font = '14px Arial';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText(`Party: ${room?.partyScore || 0}`, 10, 10);
-    // Firebase에서 현재 플레이어의 점수 가져오기
+    ctx.fillText(`Party: ${room?.partyScore || 0}`, 10, UI_TOP);
     const myScore = room?.players[this.sync.playerId]?.score || 0;
-    ctx.fillText(`My: ${myScore}`, 10, 28);
+    ctx.fillText(`My: ${myScore}`, 10, UI_TOP + 18);
 
     // 호스트 표시
     if (this.sync.isHost) {
       ctx.fillStyle = '#4BC0C0';
-      ctx.fillText('(Host)', 10, 46);
+      ctx.fillText('(Host)', 10, UI_TOP + 36);
     }
 
-    // 현재 턴 플레이어
+    // 현재 턴 플레이어 (상단 중앙)
     if (room) {
       const currentPlayerId = room.playerOrder[room.currentPlayerIndex];
       const currentPlayer = room.players[currentPlayerId];
       const isMyTurn = this.sync.isMyTurn;
 
-      ctx.textAlign = 'right';
+      ctx.textAlign = 'center';
       ctx.fillStyle = isMyTurn ? '#4BC0C0' : '#fff';
-      ctx.fillText(isMyTurn ? 'Your Turn!' : `${currentPlayer?.name || 'Unknown'}'s Turn`, WIDTH - 10, 10);
+      ctx.font = 'bold 14px Arial';
+      ctx.fillText(isMyTurn ? 'Your Turn!' : `${currentPlayer?.name || 'Unknown'}'s Turn`, WIDTH / 2, UI_TOP);
     }
 
-    // 타이머 (ready 상태일 때)
+    // 타이머 (상단 중앙, 턴 표시 아래)
     if (this.turnPhase === 'ready' && this.sync.isMyTurn) {
       ctx.textAlign = 'center';
       ctx.fillStyle = this.timeRemaining <= 3 ? '#e94560' : 'rgba(233, 69, 96, 0.8)';
       ctx.beginPath();
-      ctx.roundRect(WIDTH / 2 - 25, 8, 50, 28, 6);
+      ctx.roundRect(WIDTH / 2 - 20, UI_TOP + 20, 40, 28, 6);
       ctx.fill();
 
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 18px Arial';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${this.timeRemaining}`, WIDTH / 2, 22);
+      ctx.fillText(`${this.timeRemaining}`, WIDTH / 2, UI_TOP + 34);
     }
 
     // Waiting 표시 (settling)
@@ -1775,10 +1892,10 @@ export class MultiplayerGame {
       ctx.fillStyle = '#FFCD56';
       ctx.font = '14px Arial';
       ctx.textBaseline = 'top';
-      ctx.fillText('Settling...', WIDTH / 2, 45);
+      ctx.fillText('Settling...', WIDTH / 2, UI_TOP + 22);
     }
 
-    // 게임오버 경고 표시
+    // 게임오버 경고 표시 (라인 바로 위)
     if (this.isOverLine && this.gameOverTimer > 0) {
       const remainingTime = Math.ceil((GAME_OVER_CHECK_FRAMES - this.gameOverTimer) / 60);
       ctx.textAlign = 'center';
@@ -1788,7 +1905,7 @@ export class MultiplayerGame {
       ctx.fillText(`WARNING! ${remainingTime}s`, WIDTH / 2, GAME_OVER_Y - 10);
     }
 
-    // 플레이어 목록 (우측)
+    // 플레이어 목록 (상단 우측)
     if (room) {
       const players = Object.values(room.players) as RoomPlayer[];
       players.sort((a, b) => b.score - a.score);
@@ -1797,12 +1914,14 @@ export class MultiplayerGame {
       ctx.font = '11px Arial';
       ctx.textBaseline = 'top';
 
-      players.forEach((player, i) => {
+      // 최대 4명까지 표시
+      const displayPlayers = players.slice(0, 4);
+      displayPlayers.forEach((player, i) => {
         const isCurrentTurn = room.playerOrder[room.currentPlayerIndex] === player.id;
-        const hostMark = player.isHost ? '★' : '';
-        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+        const hostMark = player.isHost ? '*' : '';
+        const medal = i === 0 ? '1.' : i === 1 ? '2.' : i === 2 ? '3.' : `${i + 1}.`;
         ctx.fillStyle = isCurrentTurn ? '#4BC0C0' : '#aaa';
-        ctx.fillText(`${medal}${hostMark}${player.name}: ${player.score}`, WIDTH - 10, 50 + i * 16);
+        ctx.fillText(`${medal}${hostMark}${player.name}: ${player.score}`, WIDTH - 10, UI_TOP + i * 14);
       });
     }
   }
