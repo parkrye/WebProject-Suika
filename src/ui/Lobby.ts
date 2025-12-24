@@ -464,6 +464,9 @@ export class Lobby {
     // UI 재렌더링
     this.render();
 
+    // 닉네임 표시
+    document.getElementById('display-name')!.textContent = network.name;
+
     // 대기방 표시
     document.getElementById('name-input-section')!.style.display = 'none';
     document.getElementById('menu-section')!.style.display = 'none';
