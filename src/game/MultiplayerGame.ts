@@ -85,8 +85,8 @@ export class MultiplayerGame {
   private slingshotCurrentY = 0;
   private launchVelocity: { x: number; y: number } = { x: 0, y: 0 };
 
-  // 비행 중인 과일 (중력 무시, 충돌 시 해제)
-  private inFlightFruits = new Set<string>();
+  // 비행 중인 과일 (중력 무시, 충돌 시 해제) - 발사 속도 저장
+  private inFlightFruits = new Map<string, { vx: number; vy: number }>();
 
   // 충돌 처리
   private mergedPairs = new Set<string>();
@@ -794,6 +794,9 @@ export class MultiplayerGame {
       { x: velocityX, y: velocityY }
     );
 
+    // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
+    this.inFlightFruits.set(fruitId, { vx: velocityX, vy: velocityY });
+
     // Firebase에 과일 동기화 (호스트 권한으로 직접 수행, isMyTurn 체크 없음)
     this.sync.hostAddFruit(fruitId, x, LAUNCH_Y, size);
 
@@ -857,8 +860,8 @@ export class MultiplayerGame {
         this.currentFruitSize,
         velocity
       );
-      // 비행 상태로 마크 (충돌 전까지 중력 무시)
-      this.inFlightFruits.add(fruitId);
+      // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
+      this.inFlightFruits.set(fruitId, { vx: velocity.x, vy: velocity.y });
 
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
@@ -880,8 +883,8 @@ export class MultiplayerGame {
         this.currentFruitSize,
         velocity
       );
-      // 비행 상태로 마크 (충돌 전까지 중력 무시)
-      this.inFlightFruits.add(tempFruitId);
+      // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
+      this.inFlightFruits.set(tempFruitId, { vx: velocity.x, vy: velocity.y });
 
       this.turnPhase = 'settling';
       this.settleCheckTimer = 0;
@@ -1664,8 +1667,8 @@ export class MultiplayerGame {
     this.frameCount++;
 
     // 비행 중인 과일: 중력 무시하고 직선 비행
-    // 방법: 중력을 상쇄하지 않고, 매 프레임 속도를 유지
-    for (const fruitId of this.inFlightFruits) {
+    // 방법: 저장된 발사 속도를 매 프레임 직접 적용
+    for (const [fruitId, storedVelocity] of this.inFlightFruits.entries()) {
       const body = this.fruits.get(fruitId);
       if (body) {
         // 화면 경계 체크 - 벽에 닿으면 비행 상태 해제
@@ -1680,13 +1683,10 @@ export class MultiplayerGame {
           continue;
         }
 
-        // 비행 중에는 중력 영향 제거: 속도에서 중력 효과 상쇄
-        // gravity.y = -1 이므로, 매 프레임 velocity.y에 +1이 더해짐 (위로 가속)
-        // 이를 상쇄하려면 velocity.y에서 -1을 빼야 함 (실제로는 더해진 만큼 빼기)
-        const gravityEffect = this.engine.world.gravity.y;
+        // 비행 중에는 저장된 발사 속도를 직접 적용 (중력 무시)
         Matter.Body.setVelocity(body, {
-          x: body.velocity.x,
-          y: body.velocity.y - gravityEffect // 중력 효과 상쇄
+          x: storedVelocity.vx,
+          y: storedVelocity.vy
         });
       }
     }
