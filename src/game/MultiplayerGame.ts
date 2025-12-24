@@ -25,7 +25,7 @@ const MIN_LAUNCH_SPEED = 5;        // 최소 발사 속도
 const MAX_LAUNCH_SPEED = 15;       // 최대 발사 속도
 
 // 합성 시 튕김 계수 (속도 벡터 크기에 비례)
-const MERGE_BOUNCE_MULTIPLIER = 2.0; // 합성 전 속도의 200%로 튕김
+const MERGE_BOUNCE_MULTIPLIER = 3.0; // 합성 전 속도의 300%로 튕김
 
 // 크기 10 폭발 충격파
 const EXPLOSION_RADIUS = 200;      // 충격파 영향 범위 (px)
