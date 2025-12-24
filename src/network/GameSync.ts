@@ -190,9 +190,9 @@ export class GameSync {
     await this.network.updateCurrentFruitPosition(x);
   }
 
-  async dropFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
+  async dropFruit(fruitId: string, x: number, y: number, size: number, ownerId: string): Promise<void> {
     if (!this.isMyTurn) return;
-    await this.network.dropFruit(fruitId, x, y, size);
+    await this.network.dropFruit(fruitId, x, y, size, ownerId);
   }
 
   // 비호스트용: 드롭 요청만 전송
@@ -217,10 +217,11 @@ export class GameSync {
     x: number,
     y: number,
     size: number,
-    velocity: { x: number; y: number }
+    velocity: { x: number; y: number },
+    ownerId: string
   ): Promise<void> {
     if (!this.isMyTurn) return;
-    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity);
+    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity, ownerId);
   }
 
   // 호스트용: 비호스트의 속도 포함 드롭 요청 처리
@@ -229,10 +230,11 @@ export class GameSync {
     x: number,
     y: number,
     size: number,
-    velocity: { x: number; y: number }
+    velocity: { x: number; y: number },
+    ownerId: string
   ): Promise<void> {
     if (!this.isHost) return;
-    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity);
+    await this.network.dropFruitWithVelocity(fruitId, x, y, size, velocity, ownerId);
   }
 
   // 호스트용: 드롭 요청 처리 완료 후 삭제
@@ -241,9 +243,9 @@ export class GameSync {
   }
 
   // 호스트 전용: 비호스트의 드롭 요청 처리 시 과일 추가 (isMyTurn 체크 없음)
-  async hostAddFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
+  async hostAddFruit(fruitId: string, x: number, y: number, size: number, ownerId: string): Promise<void> {
     if (!this.isHost) return;
-    await this.network.dropFruit(fruitId, x, y, size);
+    await this.network.dropFruit(fruitId, x, y, size, ownerId);
   }
 
   async reportMerge(
@@ -252,11 +254,12 @@ export class GameSync {
     newFruitId: string,
     x: number,
     y: number,
-    newSize: number
+    newSize: number,
+    ownerId: string
   ): Promise<void> {
     await this.network.removeFruit(removedId1);
     await this.network.removeFruit(removedId2);
-    await this.network.addMergedFruit(newFruitId, x, y, newSize);
+    await this.network.addMergedFruit(newFruitId, x, y, newSize, ownerId);
 
     if (newSize > (this.currentRoom?.maxFruitSize || 1)) {
       await this.network.updateMaxFruitSize(newSize);
@@ -289,7 +292,7 @@ export class GameSync {
   }
 
   async syncAllFruits(
-    fruits: Record<string, { x: number; y: number; size: number }>,
+    fruits: Record<string, { x: number; y: number; size: number; ownerId: string }>,
     deletedIds: string[] = []
   ): Promise<void> {
     await this.network.syncAllFruits(fruits, deletedIds);

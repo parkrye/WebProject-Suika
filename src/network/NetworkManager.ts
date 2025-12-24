@@ -179,7 +179,7 @@ export class NetworkManager {
     await update(ref(database, `rooms/${this.currentRoomId}/currentFruit`), { x });
   }
 
-  async dropFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
+  async dropFruit(fruitId: string, x: number, y: number, size: number, ownerId: string): Promise<void> {
     if (!this.currentRoomId) return;
 
     await update(ref(database, `rooms/${this.currentRoomId}/fruits/${fruitId}`), {
@@ -188,6 +188,7 @@ export class NetworkManager {
       y,
       size,
       isDropped: true,
+      ownerId,
     });
 
     await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
@@ -239,7 +240,8 @@ export class NetworkManager {
     x: number,
     y: number,
     size: number,
-    velocity: { x: number; y: number }
+    velocity: { x: number; y: number },
+    ownerId: string
   ): Promise<void> {
     if (!this.currentRoomId) return;
 
@@ -251,6 +253,7 @@ export class NetworkManager {
       velocityX: velocity.x,
       velocityY: velocity.y,
       isDropped: true,
+      ownerId,
     });
 
     await set(ref(database, `rooms/${this.currentRoomId}/currentFruit`), null);
@@ -292,7 +295,7 @@ export class NetworkManager {
     await remove(ref(database, `rooms/${this.currentRoomId}/fruits/${fruitId}`));
   }
 
-  async addMergedFruit(fruitId: string, x: number, y: number, size: number): Promise<void> {
+  async addMergedFruit(fruitId: string, x: number, y: number, size: number, ownerId: string): Promise<void> {
     if (!this.currentRoomId) return;
 
     await update(ref(database, `rooms/${this.currentRoomId}/fruits/${fruitId}`), {
@@ -301,6 +304,7 @@ export class NetworkManager {
       y,
       size,
       isDropped: true,
+      ownerId,
     });
   }
 
@@ -322,12 +326,12 @@ export class NetworkManager {
   }
 
   async syncAllFruits(
-    fruits: Record<string, { x: number; y: number; size: number }>,
+    fruits: Record<string, { x: number; y: number; size: number; ownerId: string }>,
     deletedIds: string[] = []
   ): Promise<void> {
     if (!this.currentRoomId) return;
 
-    const fruitsUpdate: Record<string, { id: string; x: number; y: number; size: number; isDropped: boolean } | null> = {};
+    const fruitsUpdate: Record<string, { id: string; x: number; y: number; size: number; isDropped: boolean; ownerId: string } | null> = {};
 
     // 업데이트할 과일
     for (const [id, fruit] of Object.entries(fruits)) {
@@ -337,6 +341,7 @@ export class NetworkManager {
         y: fruit.y,
         size: fruit.size,
         isDropped: true,
+        ownerId: fruit.ownerId,
       };
     }
 

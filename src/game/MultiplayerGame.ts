@@ -88,6 +88,9 @@ export class MultiplayerGame {
   // 비행 중인 과일 (중력 무시, 충돌 시 해제) - 발사 속도 저장
   private inFlightFruits = new Map<string, { vx: number; vy: number }>();
 
+  // 과일 소유자 (fruitId -> playerId)
+  private fruitOwners = new Map<string, string>();
+
   // 충돌 처리
   private mergedPairs = new Set<string>();
   private settleCheckTimer = 0;
@@ -744,8 +747,8 @@ export class MultiplayerGame {
         continue;
       }
       if (!this.fruits.has(id)) {
-        // 새 과일 생성 (비호스트가 드롭한 것)
-        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
+        // 새 과일 생성 (비호스트가 드롭한 것, ownerId 포함)
+        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size, undefined, fruitState.ownerId);
       }
       // 기존 과일 위치는 업데이트하지 않음 (호스트가 물리 시뮬레이션 권위자)
     }
@@ -794,9 +797,13 @@ export class MultiplayerGame {
         // 위치 업데이트
         Matter.Body.setPosition(existingBody, { x: fruitState.x, y: fruitState.y });
         Matter.Body.setVelocity(existingBody, { x: 0, y: 0 });
+        // ownerId 업데이트
+        if (fruitState.ownerId) {
+          this.fruitOwners.set(id, fruitState.ownerId);
+        }
       } else {
-        // 새 과일 생성
-        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size);
+        // 새 과일 생성 (ownerId 포함)
+        this.createFruitWithId(id, fruitState.x, fruitState.y, fruitState.size, undefined, fruitState.ownerId);
       }
     }
   }
@@ -880,20 +887,21 @@ export class MultiplayerGame {
     // 고유 ID 생성
     const fruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    // 물리 엔진에 과일 생성 (발사 위치와 전달받은 속도)
+    // 물리 엔진에 과일 생성 (발사 위치와 전달받은 속도, 소유자 = 요청한 플레이어)
     this.createFruitWithId(
       fruitId,
       x,
       LAUNCH_Y,
       size,
-      { x: velocityX, y: velocityY }
+      { x: velocityX, y: velocityY },
+      playerId
     );
 
     // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
     this.inFlightFruits.set(fruitId, { vx: velocityX, vy: velocityY });
 
     // Firebase에 과일 동기화 (호스트 권한으로 직접 수행, isMyTurn 체크 없음)
-    this.sync.hostAddFruit(fruitId, x, LAUNCH_Y, size);
+    this.sync.hostAddFruit(fruitId, x, LAUNCH_Y, size, playerId);
 
     // 드롭 요청 삭제
     this.sync.clearDropRequest();
@@ -944,13 +952,14 @@ export class MultiplayerGame {
       this.droppedFruitId = fruitId;
       this.lastDropPlayerId = this.sync.playerId; // 합성 점수용
 
-      // 발사 위치와 동적 속도로 생성
+      // 발사 위치와 동적 속도로 생성 (소유자 = 현재 플레이어)
       this.createFruitWithId(
         fruitId,
         this.dropX,
         LAUNCH_Y,
         this.currentFruitSize,
-        velocity
+        velocity,
+        this.sync.playerId
       );
       // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
       this.inFlightFruits.set(fruitId, { vx: velocity.x, vy: velocity.y });
@@ -959,10 +968,10 @@ export class MultiplayerGame {
       this.settleCheckTimer = 0;
 
       // Firebase에 과일 동기화 (velocity 포함)
-      this.sync.dropFruitWithVelocity(fruitId, this.dropX, LAUNCH_Y, this.currentFruitSize, velocity);
+      this.sync.dropFruitWithVelocity(fruitId, this.dropX, LAUNCH_Y, this.currentFruitSize, velocity, this.sync.playerId);
     } else {
       // 비호스트: 드롭 요청 전송 + 로컬 예측 렌더링용 임시 과일 생성
-      // 로컬 예측 렌더링용 임시 과일 생성 (발사 애니메이션)
+      // 로컬 예측 렌더링용 임시 과일 생성 (발사 애니메이션, 소유자 = 현재 플레이어)
       const tempFruitId = `temp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       this.pendingDropFruitId = tempFruitId;
       this.pendingDropSynced = false;
@@ -971,7 +980,8 @@ export class MultiplayerGame {
         this.dropX,
         LAUNCH_Y,
         this.currentFruitSize,
-        velocity
+        velocity,
+        this.sync.playerId
       );
       // 비행 상태로 마크 (충돌 전까지 중력 무시) - 발사 속도 저장
       this.inFlightFruits.set(tempFruitId, { vx: velocity.x, vy: velocity.y });
@@ -993,7 +1003,8 @@ export class MultiplayerGame {
     x: number,
     y: number,
     size: number,
-    initialVelocity?: { x: number; y: number }
+    initialVelocity?: { x: number; y: number },
+    ownerId?: string
   ): Matter.Body {
     const data = FRUIT_DATA[size - 1] || FRUIT_DATA[0];
 
@@ -1007,6 +1018,11 @@ export class MultiplayerGame {
 
     Matter.Composite.add(this.engine.world, fruit);
     this.fruits.set(id, fruit);
+
+    // 과일 소유자 저장
+    if (ownerId) {
+      this.fruitOwners.set(id, ownerId);
+    }
 
     // 초기 속도 설정 (발사용)
     if (initialVelocity) {
@@ -1069,6 +1085,10 @@ export class MultiplayerGame {
         const midY = (bodyA.position.y + bodyB.position.y) / 2;
         const newSize = fruitA.size + 1;
 
+        // 두 과일의 소유자 확인
+        const ownerA = this.fruitOwners.get(fruitA.id);
+        const ownerB = this.fruitOwners.get(fruitB.id);
+
         // 두 오브젝트의 속도 벡터 합산 (제거 전에 저장)
         const avgVx = (bodyA.velocity.x + bodyB.velocity.x) * 0.5;
         const avgVy = (bodyA.velocity.y + bodyB.velocity.y) * 0.5;
@@ -1082,17 +1102,49 @@ export class MultiplayerGame {
         // 기존 과일 제거
         this.removeFruitById(fruitA.id);
         this.removeFruitById(fruitB.id);
+        this.fruitOwners.delete(fruitA.id);
+        this.fruitOwners.delete(fruitB.id);
 
         // 합체 사운드
         this.audio.playSFX('MERGE');
+
+        // 점수 계산
+        const scoreGain = newSize >= MAX_FRUIT_SIZE
+          ? (FRUIT_DATA[MAX_FRUIT_SIZE - 1]?.score || 0)
+          : (FRUIT_DATA[newSize - 1]?.score || 0);
+
+        // 점수 분배: 소유자가 같으면 전체, 다르면 절반씩
+        const room = this.sync.room;
+        if (room && scoreGain > 0) {
+          if (ownerA && ownerB && ownerA === ownerB) {
+            // 같은 소유자: 전체 점수
+            const newPartyScore = room.partyScore + scoreGain;
+            this.sync.reportPlayerScore(ownerA, scoreGain, newPartyScore);
+          } else if (ownerA && ownerB) {
+            // 다른 소유자: 각자 절반씩
+            const halfScore = Math.floor(scoreGain / 2);
+            const newPartyScore = room.partyScore + scoreGain;
+            this.sync.reportPlayerScore(ownerA, halfScore, newPartyScore);
+            // 두 번째 플레이어 점수는 partyScore 변경 없이
+            const updatedRoom = this.sync.room;
+            if (updatedRoom) {
+              this.sync.reportPlayerScore(ownerB, scoreGain - halfScore, updatedRoom.partyScore);
+            }
+          } else if (ownerA || ownerB) {
+            // 한 쪽만 소유자 있으면 해당 플레이어에게
+            const owner = ownerA || ownerB;
+            const newPartyScore = room.partyScore + scoreGain;
+            this.sync.reportPlayerScore(owner!, scoreGain, newPartyScore);
+          }
+        }
+
+        // 새 과일 소유자: 마지막 드롭한 플레이어
+        const newOwnerId = this.lastDropPlayerId || ownerA || ownerB || this.sync.playerId;
 
         // 크기 10이면 폭죽 효과 후 사라짐
         if (newSize >= MAX_FRUIT_SIZE) {
           this.createFirework(midX, midY);
           this.applyExplosionForce(midX, midY); // 주변 공들에게 충격파
-
-          // 점수 추가 (크기 10 보너스) - 마지막 드롭한 플레이어에게
-          const scoreGain = FRUIT_DATA[MAX_FRUIT_SIZE - 1]?.score || 0;
 
           // 최대 크기 업데이트
           if (MAX_FRUIT_SIZE > this.maxFruitSize) {
@@ -1103,20 +1155,10 @@ export class MultiplayerGame {
           if (this.droppedFruitId === fruitA.id || this.droppedFruitId === fruitB.id) {
             this.droppedFruitId = null;
           }
-
-          // 마지막 드롭한 플레이어에게 점수 부여
-          const room = this.sync.room;
-          if (room && this.lastDropPlayerId) {
-            const newPartyScore = room.partyScore + scoreGain;
-            this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
-          }
         } else {
           // 새 과일 생성 (두 오브젝트의 속도 벡터 합산 방향으로 튕김)
           const newFruitId = `fruit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-          this.createFruitWithId(newFruitId, midX, midY, newSize, combinedVelocity);
-
-          // 점수 추가 - 마지막 드롭한 플레이어에게
-          const scoreGain = FRUIT_DATA[newSize - 1]?.score || 0;
+          this.createFruitWithId(newFruitId, midX, midY, newSize, combinedVelocity, newOwnerId);
 
           // 최대 크기 업데이트
           if (newSize > this.maxFruitSize) {
@@ -1126,13 +1168,6 @@ export class MultiplayerGame {
           // 드롭한 과일이 합쳐졌으면 새 과일로 교체
           if (this.droppedFruitId === fruitA.id || this.droppedFruitId === fruitB.id) {
             this.droppedFruitId = newFruitId;
-          }
-
-          // 마지막 드롭한 플레이어에게 점수 부여
-          const room = this.sync.room;
-          if (room && this.lastDropPlayerId) {
-            const newPartyScore = room.partyScore + scoreGain;
-            this.sync.reportPlayerScore(this.lastDropPlayerId, scoreGain, newPartyScore);
           }
         }
 
@@ -1308,7 +1343,7 @@ export class MultiplayerGame {
   private syncFruitsToServer(): void {
     if (!this.sync.isHost) return;
 
-    const fruitsData: Record<string, { x: number; y: number; size: number }> = {};
+    const fruitsData: Record<string, { x: number; y: number; size: number; ownerId: string }> = {};
 
     // 호스트의 로컬 과일 (물리 엔진 위치)
     for (const [id, body] of this.fruits) {
@@ -1318,6 +1353,7 @@ export class MultiplayerGame {
           x: Math.round(body.position.x),
           y: Math.round(body.position.y),
           size: parsed.size,
+          ownerId: this.fruitOwners.get(id) || this.sync.playerId,
         };
       }
     }

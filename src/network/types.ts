@@ -12,6 +12,7 @@ export interface FruitState {
   y: number;
   size: number;
   isDropped: boolean;
+  ownerId: string; // 생성/마지막 합성한 플레이어 ID
 }
 
 export interface DropRequest {
