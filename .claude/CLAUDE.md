@@ -111,23 +111,42 @@ Player Input → Host Physics → Firebase → All Clients Render
 - **호스트**: 물리 시뮬레이션 실행, 상태를 Firebase에 동기화
 - **클라이언트**: Firebase에서 상태를 받아 렌더링만 수행
 
-### 드롭 처리 흐름
+### 슬링샷 발사 흐름
 
-**호스트가 드롭할 때:**
 ```
-호스트 Drop → 물리 엔진 생성 → Firebase 동기화 → 클라이언트 렌더링
-```
-
-**비호스트가 드롭할 때:**
-```
-비호스트 Drop
+터치/클릭 시작
     ↓
-1. dropRequest를 Firebase에 전송 (requestDrop)
-2. 로컬 임시 과일 생성 (예측 렌더링용)
+positioning 상태 (좌우 X 위치 조정)
+    ↓
+아래로 당기기 (PULL_START_THRESHOLD 이상)
+    ↓
+pulling 상태 (파워 게이지 표시)
+    ↓
+터치/클릭 종료
+    ↓
+당긴 거리 확인
+    ↓
+MIN_PULL_DISTANCE 이상 → 발사
+MIN_PULL_DISTANCE 미만 → 리셋 (X 위치 유지)
+```
+
+### 발사 처리 흐름
+
+**호스트가 발사할 때:**
+```
+호스트 Launch → 물리 엔진 생성 + inFlightFruits 등록 → Firebase 동기화 → 클라이언트 렌더링
+```
+
+**비호스트가 발사할 때:**
+```
+비호스트 Launch
+    ↓
+1. dropRequest를 Firebase에 전송 (requestDropWithVelocity)
+2. 로컬 임시 과일 생성 + inFlightFruits 등록 (예측 렌더링용)
     ↓
 호스트가 dropRequest 감지
     ↓
-1. 물리 엔진에 과일 생성 (hostAddFruit)
+1. 물리 엔진에 과일 생성 + inFlightFruits 등록 (handleDropRequest)
 2. Firebase/fruits에 동기화
 3. dropRequest 삭제
     ↓
@@ -135,6 +154,22 @@ Player Input → Host Physics → Firebase → All Clients Render
     ↓
 1. 임시 과일 제거
 2. Firebase 과일로 렌더링
+```
+
+### 비행 중 중력 처리
+
+```
+발사 직후
+    ↓
+inFlightFruits Map에 {fruitId: {vx, vy}} 저장
+    ↓
+매 프레임 저장된 속도로 setVelocity (직선 비행)
+    ↓
+벽 또는 다른 과일과 충돌
+    ↓
+inFlightFruits에서 제거
+    ↓
+이후 중력 적용 (위로 떠오름)
 ```
 
 ### 이벤트 기반 통신
@@ -182,34 +217,90 @@ audio.toggleMute();           // 음소거 토글
 ### 게임오버 판정
 
 ```
-Drop 발생
+Launch 발생
     ↓
 3초 유예 기간 (DROP_GRACE_FRAMES)
 - 이 기간 동안 새 카운트다운 시작 불가
 - 이미 진행 중인 카운트다운은 계속됨
     ↓
-유예 기간 종료 + 선 위에 오브젝트 있음
+유예 기간 종료 + 선 아래에 오브젝트 있음
     ↓
 카운트다운 시작 (GAME_OVER_CHECK_FRAMES = 2초)
     ↓
 ┌─────────────────────────────────────────────────┐
 │  카운트다운 진행 중                                │
-│  - 새 Drop 해도 리셋 안됨                         │
-│  - 선 아래로 내려가면 → 카운트다운 종료            │
+│  - 새 Launch 해도 리셋 안됨                       │
+│  - 선 위로 올라가면 → 카운트다운 종료              │
 │  - 0이 되면 → 게임오버                           │
 └─────────────────────────────────────────────────┘
 ```
 
+### Play Again 시스템
+
+```
+게임오버 → Play Again 클릭
+    ↓
+호스트: resetToWaitingRoom() 호출
+- status: 'waiting'
+- 모든 플레이어 score: 0, isReady: false
+- fruits, partyScore, maxFruitSize 초기화
+    ↓
+모든 클라이언트: Firebase 업데이트 수신
+    ↓
+game.destroy() → 게임 리소스 정리
+    ↓
+lobby.returnToWaitingRoom(network) → 대기방 UI 표시
+```
+
 ---
 
-## 게임 설정값 (config.ts)
+## 게임 설정값 (MultiplayerGame.ts)
+
+### 화면 레이아웃
+
+| 상수 | 값 | 설명 |
+|------|---|------|
+| `WIDTH` | 400 | 캔버스 너비 |
+| `HEIGHT` | 600 | 캔버스 높이 |
+| `UI_AREA_HEIGHT` | 70 | 상단 UI 영역 높이 |
+| `CEILING_Y` | 70 | 천장 Y좌표 (오브젝트 쌓임) |
+| `LAUNCH_Y` | 540 | 발사 위치 Y좌표 |
+| `GAME_OVER_Y` | 500 | 게임오버 라인 Y좌표 |
+
+### 슬링샷 설정 (모바일 최적화)
+
+| 상수 | 값 | 설명 |
+|------|---|------|
+| `SLINGSHOT_ZONE_TOP` | 350 | 터치 영역 시작 Y좌표 |
+| `PULL_START_THRESHOLD` | 30 | 당기기 시작 임계값 |
+| `MIN_PULL_DISTANCE` | 40 | 최소 당김 거리 |
+| `MAX_PULL_DISTANCE` | 120 | 최대 당김 거리 |
+| `MIN_LAUNCH_SPEED` | 5 | 최소 발사 속도 |
+| `MAX_LAUNCH_SPEED` | 15 | 최대 발사 속도 |
+
+### 게임 진행
 
 | 상수 | 값 | 설명 |
 |------|---|------|
 | `TURN_TIME` | 10 | 턴 제한 시간 (초) |
-| `GAME_OVER_LINE_Y` | 100 | 게임오버 라인 Y좌표 |
-| `MAX_FRUIT_SIZE` | 10 | 최대 폭죽 크기 |
+| `DROP_DELAY_MS` | 1000 | 턴 시작 후 발사 활성화까지 대기 |
 | `SETTLE_FRAMES` | 15 | 안정화 대기 프레임 |
+| `SYNC_INTERVAL` | 5 | 호스트 동기화 주기 (프레임) |
+
+### 게임오버 판정
+
+| 상수 | 값 | 설명 |
+|------|---|------|
+| `GAME_OVER_CHECK_FRAMES` | 120 | 게임오버 판정 시간 (2초) |
+| `DROP_GRACE_FRAMES` | 180 | 드롭 후 유예 기간 (3초) |
+
+### 물리 효과
+
+| 상수 | 값 | 설명 |
+|------|---|------|
+| `MERGE_BOUNCE_MULTIPLIER` | 1.2 | 합성 시 튕김 계수 |
+| `EXPLOSION_RADIUS` | 200 | 크기10 폭발 충격파 범위 |
+| `EXPLOSION_FORCE` | 0.05 | 충격파 힘 |
 
 ---
 
