@@ -952,6 +952,15 @@ export class MultiplayerGame {
       const fruitA = this.parseFruitLabel(pair.bodyA.label);
       const fruitB = this.parseFruitLabel(pair.bodyB.label);
 
+      // 디버깅: 충돌 정보 출력
+      const labelA = pair.bodyA.label;
+      const labelB = pair.bodyB.label;
+      const wasInFlightA = fruitA && this.inFlightFruits.has(fruitA.id);
+      const wasInFlightB = fruitB && this.inFlightFruits.has(fruitB.id);
+      if (wasInFlightA || wasInFlightB) {
+        console.log('[Collision] 비행 중 과일 충돌:', labelA, 'vs', labelB);
+      }
+
       // 벽이나 다른 오브젝트와 충돌 시 비행 상태 해제
       if (fruitA) this.inFlightFruits.delete(fruitA.id);
       if (fruitB) this.inFlightFruits.delete(fruitB.id);
@@ -973,6 +982,8 @@ export class MultiplayerGame {
           this.mergedPairs.delete(pairKey);
           return;
         }
+
+        console.log('[Merge] 합성:', fruitA.id, '(size:', fruitA.size, ') +', fruitB.id, '(size:', fruitB.size, ')');
 
         const midX = (bodyA.position.x + bodyB.position.x) / 2;
         const midY = (bodyA.position.y + bodyB.position.y) / 2;
@@ -1656,6 +1667,18 @@ export class MultiplayerGame {
     for (const fruitId of this.inFlightFruits) {
       const body = this.fruits.get(fruitId);
       if (body) {
+        // 화면 경계 체크 - 벽에 닿으면 비행 상태 해제
+        const { x, y } = body.position;
+        const parsed = this.parseFruitLabel(body.label);
+        const radius = parsed ? FRUIT_DATA[parsed.size - 1]?.radius || 15 : 15;
+
+        if (x - radius <= 5 || x + radius >= WIDTH - 5 ||
+            y - radius <= CEILING_Y + 5 || y + radius >= HEIGHT - 5) {
+          console.log('[Flight] 경계 도달, 비행 상태 해제:', fruitId, 'pos:', x, y);
+          this.inFlightFruits.delete(fruitId);
+          continue;
+        }
+
         // 중력 상쇄 (gravity.y = -1 이므로, 아래쪽 힘으로 상쇄)
         const antiGravity = { x: 0, y: body.mass * 1 }; // gravity.y = -1의 반대
         Matter.Body.applyForce(body, body.position, antiGravity);
@@ -1756,6 +1779,13 @@ export class MultiplayerGame {
   }
 
   private renderLocalFruits(ctx: CanvasRenderingContext2D): void {
+    // 디버깅: 과일 개수 및 위치 확인
+    if (this.frameCount % 60 === 0 && this.fruits.size > 0) {
+      for (const [id, fruit] of this.fruits) {
+        console.log('[Render] 과일:', id.substring(0, 20), 'pos:', Math.round(fruit.position.x), Math.round(fruit.position.y));
+      }
+    }
+
     for (const [, fruit] of this.fruits) {
       const { x, y } = fruit.position;
       const parsed = this.parseFruitLabel(fruit.label);
