@@ -394,6 +394,29 @@ export class NetworkManager {
     });
   }
 
+  // 게임 종료 후 대기방으로 돌아가기
+  async resetToWaitingRoom(): Promise<void> {
+    if (!this.currentRoomId || !this.currentRoomState) return;
+
+    // 모든 플레이어의 점수와 ready 상태 초기화
+    const playerUpdates: Record<string, unknown> = {};
+    for (const playerId of Object.keys(this.currentRoomState.players)) {
+      playerUpdates[`players/${playerId}/score`] = 0;
+      playerUpdates[`players/${playerId}/isReady`] = false;
+    }
+
+    await update(ref(database, `rooms/${this.currentRoomId}`), {
+      status: 'waiting',
+      partyScore: 0,
+      maxFruitSize: 1,
+      fruits: {},
+      currentFruit: null,
+      currentPlayerIndex: 0,
+      turnStartTime: 0,
+      ...playerUpdates,
+    });
+  }
+
   async leaveRoom(): Promise<void> {
     if (!this.currentRoomId || !this.roomRef) return;
 

@@ -40,6 +40,9 @@ new AudioControl();
 
 const lobby = new Lobby(appContainer);
 
+// 현재 게임 인스턴스 추적
+let currentGame: MultiplayerGame | null = null;
+
 lobby.setOnGameStart((network: NetworkManager) => {
   startMultiplayerGame(network);
 });
@@ -55,5 +58,26 @@ function startMultiplayerGame(network: NetworkManager): void {
   const sync = new GameSync(network);
 
   const game = new MultiplayerGame(canvas, sync);
+  currentGame = game;
+
+  // Play Again 콜백 설정
+  game.setOnPlayAgain(async () => {
+    console.log('[Main] Play Again 클릭, 대기방으로 돌아가기');
+
+    // 게임 정리
+    if (currentGame) {
+      currentGame.destroy();
+      currentGame = null;
+    }
+
+    // 호스트만 방 상태 리셋 (다른 플레이어는 자동으로 업데이트 받음)
+    if (network.isHost()) {
+      await network.resetToWaitingRoom();
+    }
+
+    // 로비 UI로 돌아가기
+    lobby.returnToWaitingRoom(network);
+  });
+
   game.start();
 }

@@ -454,4 +454,23 @@ export class Lobby {
   setOnGameStart(callback: (network: NetworkManager) => void): void {
     this.onGameStart = callback;
   }
+
+  // 게임 종료 후 대기방으로 돌아오기
+  returnToWaitingRoom(network: NetworkManager): void {
+    this.network = network;
+    this.gameStarted = false;
+    this.isReady = false;
+
+    // UI 재렌더링
+    this.render();
+
+    // 대기방 표시
+    document.getElementById('name-input-section')!.style.display = 'none';
+    document.getElementById('menu-section')!.style.display = 'none';
+    document.getElementById('waiting-room-section')!.style.display = 'flex';
+    document.getElementById('room-id-display')!.textContent = network.roomId?.substring(0, 8) || '';
+
+    // 방 상태 업데이트 구독
+    this.network.onRoomUpdate((room) => this.updateWaitingRoom(room));
+  }
 }

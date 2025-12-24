@@ -113,6 +113,9 @@ export class MultiplayerGame {
   // 오디오 매니저
   private audio: AudioManager;
 
+  // Play Again 콜백
+  private onPlayAgainCallback: (() => void) | null = null;
+
   constructor(canvas: HTMLCanvasElement, sync: GameSync) {
     this.audio = AudioManager.getInstance();
     this.ctx = canvas.getContext('2d')!;
@@ -1537,7 +1540,7 @@ export class MultiplayerGame {
           <div class="top-contributors" id="top-contributors"></div>
         </div>
 
-        <button class="play-again-btn" id="play-again-btn" onclick="location.reload()">Play Again</button>
+        <button class="play-again-btn" id="play-again-btn">Play Again</button>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -1630,11 +1633,19 @@ export class MultiplayerGame {
         `).join('');
     }
 
-    // Play Again 버튼 표시
+    // Play Again 버튼 표시 및 이벤트 핸들러 등록
     await delay(600);
     const playAgainBtn = document.getElementById('play-again-btn');
     if (playAgainBtn) {
       playAgainBtn.classList.add('visible');
+      playAgainBtn.addEventListener('click', () => {
+        if (this.onPlayAgainCallback) {
+          this.onPlayAgainCallback();
+        } else {
+          // 콜백이 없으면 기존처럼 새로고침
+          location.reload();
+        }
+      });
     }
   }
 
@@ -1978,5 +1989,33 @@ export class MultiplayerGame {
     this.isRunning = false;
     this.stopTimer();
     this.audio.stopBGM();
+  }
+
+  // Play Again 콜백 설정
+  setOnPlayAgain(callback: () => void): void {
+    this.onPlayAgainCallback = callback;
+  }
+
+  // 게임 정리 (리소스 해제)
+  destroy(): void {
+    this.stop();
+
+    // Matter.js 정리
+    Matter.Events.off(this.engine, 'collisionStart');
+    Matter.World.clear(this.engine.world, false);
+    Matter.Engine.clear(this.engine);
+
+    // 타이머 정리
+    if (this.dropDelayTimer) {
+      clearTimeout(this.dropDelayTimer);
+    }
+
+    // 게임오버 오버레이 제거
+    const overlay = document.querySelector('.game-over-overlay');
+    if (overlay) {
+      overlay.remove();
+    }
+
+    console.log('[Game] 게임 정리 완료');
   }
 }
